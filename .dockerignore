@@ -1,0 +1,35 @@
+# Ignora le dipendenze locali, verranno installate nel container
+node_modules
+npm-debug.log
+*.log
+
+# Ignora i file di configurazione di Docker stesso
+Dockerfile
+.dockerignore
+
+# Ignora la configurazione Git
+.git
+.gitignore
+
+# Ignora file di cache e configurazione di sviluppo
+.eslintcache
+eslint.config.js
+.eslintignore
+.eslintrc.json
+.prettierignore
+.prettierrc.json
+.stylelintignore
+.stylelintrc.json
+
+# Ignora il file .env, le variabili verranno passate al runtime
+.env
+
+# Ignora file di esempio o di configurazione non strettamente necessari all'esecuzione
+ui.js.example
+# Dashboard.html sembra essere un file separato, la UI principale è in /frontend
+# Se non serve per l'esecuzione del server.js principale, puoi ignorarlo.
+# Altrimenti, se viene servito attivamente, non ignorarlo.
+# Dashboard.html
+
+# File di configurazione Kubernetes (non servono nella build dell'immagine dell'app)
+*.yaml

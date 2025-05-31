@@ -1,0 +1,789 @@
+// ui.js - Gestore Interfaccia Utente con Data Attributes
+
+// Questo IIFE (Immediately Invoked Function Expression) isola le variabili
+(function() {
+    // --- Stato UI & Riferimenti DOM ---
+    let loggedInUserAddress = null;
+    let selectedSubscriptionId = null;
+    let selectedImageName = 'ubuntu:latest'; // Default image
+    let termDataListener = null;
+    let termResizeListener = null;
+    let resizeTimeout = null;
+
+    // Riferimenti DOM (verranno popolati in initDOMReferences)
+    let appContainer, // Contenitore principale
+        usernameInput, passwordInput, userEthAddressEl, signupButton, loginButton, logoutButton,
+        subDurationInput, subReplicasInput, subCpuRange, subCpuOutput, subRamRange, subRamOutput,
+        subStorageRange, subStorageOutput, configureSubButton, checkSubsButton,
+        subscriptionSelect, openShellButton, launchControl, // launchControl è interno, usa ancora .hidden
+        authSection, dashboardSection, terminalContainer, // Sezioni principali (gestite da data-active-view)
+        terminalElement, wsStatusEl, subscribeDialog,
+        cancelSubButton, confirmSubButton, selectImageButton, imageSelectDialog,
+        cancelImageSelect, imageGrid, selectedImageNameEl, loadingOverlay,
+        authMessagesEl, dashboardMessagesEl, toastContainer,
+        closeTerminalButton; // Bottone chiusura terminale
+
+    // Flag per sapere se il DOM è pronto
+    let domReady = false;
+
+    // Istanza Terminale
+    const term = new Terminal({
+        cursorBlink: true, scrollback: 1000, tabStopWidth: 4, convertEol: true,
+        theme: { background: '#0d1117', foreground: '#c9d1d9', cursor: 'rgba(57, 197, 207, 0.7)', selectionBackground: 'rgba(57, 197, 207, 0.2)' },
+        fontSize: 15,
+        fontFamily: 'Rajdhani, Menlo, Monaco, "Courier New", monospace',
+        allowProposedApi: true,
+    });
+    const fitAddon = new FitAddon.FitAddon();
+    const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+    // --- Funzioni Helper UI ---
+    function logToArea(areaEl, msg, color = "cyan") {
+        if (areaEl) {
+            areaEl.className = 'message-area'; // Reset classi colore
+            if (color) areaEl.classList.add(`color-${color}`);
+            areaEl.textContent = msg;
+        }
+        console.log(`[UI Log ${color}] ${msg}`);
+    }
+
+    function logAuthMsg(msg, color = "cyan") { logToArea(authMessagesEl, msg, color); }
+    function logDashboardMsg(msg, color = "cyan") { logToArea(dashboardMessagesEl, msg, color); }
+
+    function showErr(prefix, err) {
+        let msg = `${prefix}: ${err?.message || JSON.stringify(err)}`;
+        if (err?.response) { const d = err.response.data; const detail = d?.error || d?.message || JSON.stringify(d); msg = `${prefix}: Status ${err.response.status}, Errore: ${detail}`; }
+        else if (typeof err === 'object' && err !== null && err.message) { msg = `${prefix}: ${err.message}`; }
+        logDashboardMsg(msg, "red");
+        showToast(msg, 'error', 6000);
+        console.error(prefix, err?.response || err);
+    }
+
+    // --- Gestione Loading State ---
+    function showLoading(message = "Operazione in corso...") {
+        if (loadingOverlay) {
+            loadingOverlay.querySelector('p').textContent = message;
+            loadingOverlay.classList.remove('hidden'); // Loading usa ancora .hidden
+        }
+    }
+    function hideLoading() {
+        if (loadingOverlay) {
+            loadingOverlay.classList.add('hidden'); // Loading usa ancora .hidden
+        }
+    }
+
+     function setButtonLoading(button, isLoading) {
+         if (!button) return;
+         const wasInitiallyDisabled = button.hasAttribute('disabled') && !button.classList.contains('loading');
+         if (isLoading) {
+             button.setAttribute('data-keep-disabled', wasInitiallyDisabled ? 'true' : 'false');
+             button.classList.add('loading');
+             button.disabled = true;
+             button.setAttribute('disabled', '');
+         } else {
+             button.classList.remove('loading');
+             const keepDisabled = button.getAttribute('data-keep-disabled') === 'true';
+             if (!keepDisabled) {
+                  button.disabled = false;
+                  button.removeAttribute('disabled');
+             }
+             button.removeAttribute('data-keep-disabled');
+         }
+     }
+
+    // --- Gestione Toast ---
+    function showToast(message, type = 'info', duration = 4000) {
+        if (!toastContainer) { console.warn("Toast container not found"); return; }
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type}`;
+        toast.innerHTML = `<span class="toast-message">${message}</span>`;
+        toastContainer.appendChild(toast);
+        void toast.offsetWidth;
+        requestAnimationFrame(() => toast.classList.add('show'));
+        const timerId = setTimeout(() => { removeToast(toast); }, duration);
+        toast.addEventListener('click', () => { clearTimeout(timerId); removeToast(toast); }, { once: true });
+    }
+    function removeToast(toast) {
+        if (!toast || !toastContainer || !toast.parentNode) return;
+        toast.classList.remove('show');
+        toast.addEventListener('transitionend', () => {
+            if (toast.parentNode === toastContainer) {
+                toastContainer.removeChild(toast);
+            }
+        }, { once: true });
+    }
+
+     // --- NUOVA FUNZIONE: Gestione Cambio Vista ---
+     function setActiveView(viewName) { // viewName può essere 'auth', 'dashboard', 'terminal'
+        if (appContainer) {
+            console.log(`[UI] Impostazione vista attiva a: ${viewName}`);
+            appContainer.dataset.activeView = viewName;
+
+            // Adatta il terminale *solo* quando la sua vista diventa attiva
+            // e dopo che il rendering è completato
+            if (viewName === 'terminal') {
+                requestAnimationFrame(() => {
+                     try {
+                         if (term && fitAddon && terminalContainer?.offsetParent !== null) { // Controlla anche se è effettivamente visibile
+                            console.log("[UI] Adattamento terminale su cambio vista...");
+                            fitAddon.fit();
+                            term.focus(); // Ridai il focus
+                            // Invia resize se connesso
+                            if (window.WebSocketManager?.isConnected()) {
+                                window.WebSocketManager.sendTerminalResize(term.cols, term.rows);
+                             }
+                         } else {
+                             if(terminalContainer?.offsetParent === null) {
+                                 console.warn("[UI] Tentativo fit su terminale non ancora visibile.");
+                             } else {
+                                console.warn("[UI] Impossibile adattare terminale: istanza, addon o contenitore mancante/non visibile.");
+                             }
+                         }
+                    } catch (e) {
+                         console.warn("[UI] Errore durante fitAddon su cambio vista:", e.message);
+                    }
+                });
+            }
+        } else {
+            console.error("[UI] App Container non trovato, impossibile cambiare vista.");
+        }
+    }
+
+
+    // --- Gestione Terminale ---
+    function setupTerminal() {
+        terminalElement = document.getElementById('terminal');
+        if (!terminalElement) { console.error("Terminal element #terminal not found!"); return; }
+        try {
+             term.loadAddon(fitAddon);
+             term.loadAddon(webLinksAddon);
+             term.open(terminalElement);
+             console.log("[UI] Terminal opened and addons loaded.");
+        } catch(e) {
+             console.error("Error opening terminal or loading addons:", e);
+             logAuthMsg("Errore inizializzazione terminale!", "red");
+             return;
+        }
+
+        // Adatta su resize della finestra (con debounce)
+        window.addEventListener('resize', handleWindowResize);
+        // Il messaggio iniziale è ora gestito da resetLoginState
+    }
+
+    function handleWindowResize() {
+         clearTimeout(resizeTimeout);
+         resizeTimeout = setTimeout(() => {
+             try {
+                // Controlla se la vista attiva è 'terminal' prima di fare fit
+                if (appContainer?.dataset.activeView === 'terminal') {
+                    fitAddon.fit();
+                    // Invia nuove dimensioni solo se connesso
+                    if (window.WebSocketManager?.isConnected()) {
+                        window.WebSocketManager.sendTerminalResize(term.cols, term.rows);
+                    }
+                }
+             } catch (e) {
+                console.warn("FitAddon error on window resize:", e.message);
+             }
+         }, 150);
+    }
+
+    function attachTerminalListeners() {
+         disposeTermListeners();
+         if (!term) { console.error("Cannot attach listeners, terminal instance is missing."); return; }
+         console.log("[UI] Attaching terminal listeners.");
+         try {
+             termDataListener = term.onData(data => {
+                 if (window.WebSocketManager) window.WebSocketManager.sendTerminalData(data);
+             });
+             termResizeListener = term.onResize(({ cols, rows }) => {
+                 // Invia resize solo se connessi e la vista terminale è attiva
+                 if (window.WebSocketManager?.isConnected() && appContainer?.dataset.activeView === 'terminal') {
+                    window.WebSocketManager.sendTerminalResize(cols, rows);
+                 }
+             });
+             // Invia dimensioni iniziali subito dopo l'attach se siamo connessi e la vista terminale è attiva
+             requestAnimationFrame(() => {
+                 if (window.WebSocketManager?.isConnected() && appContainer?.dataset.activeView === 'terminal') {
+                     window.WebSocketManager.sendTerminalResize(term.cols, term.rows);
+                 }
+             });
+         } catch(e) {
+              console.error("Error attaching terminal listeners:", e);
+         }
+    }
+     function reattachTerminalListeners(){
+        attachTerminalListeners();
+        console.log("[UI] Terminal listeners reattached.");
+     }
+
+    function disposeTermListeners() {
+        try {
+            if (termDataListener) { termDataListener.dispose(); termDataListener = null; console.log("[UI] Disposed term data listener."); }
+            if (termResizeListener) { termResizeListener.dispose(); termResizeListener = null; console.log("[UI] Disposed term resize listener."); }
+        } catch(e) {
+             console.warn("Error disposing terminal listeners:", e);
+        }
+    }
+
+    // --- Gestione Stato UI & Login/Logout ---
+
+    function updateWsStatus(status) { // 'connected', 'connecting', 'disconnected'
+         if (wsStatusEl) {
+             wsStatusEl.className = 'ws-status-indicator'; // Reset
+             wsStatusEl.classList.add(status);
+             let title = 'WebSocket: ';
+             if (status === 'connected') title += 'Connesso';
+             else if (status === 'connecting') title += 'Connessione...';
+             else title += 'Disconnesso';
+             wsStatusEl.title = title;
+         }
+    }
+
+    function resetLoginState() {
+        console.log("[UI] Esecuzione resetLoginState...");
+        loggedInUserAddress = null; selectedSubscriptionId = null; selectedImageName = 'ubuntu:latest';
+
+        setActiveView('auth'); // Imposta la vista di autenticazione
+
+        // launchControl è interno alla dashboard, gestiscilo ancora con .hidden
+        launchControl?.classList.add('hidden');
+
+        // Reset Campi e Bottoni
+        if(userEthAddressEl) userEthAddressEl.textContent = 'N/A';
+        if(checkSubsButton) { checkSubsButton.disabled = true; setButtonLoading(checkSubsButton, false); checkSubsButton.title = "Login richiesto"; }
+        if(configureSubButton) { configureSubButton.disabled = true; }
+        if(subscriptionSelect) { subscriptionSelect.innerHTML = '<option value="">-- Verifica richiesta --</option>'; subscriptionSelect.disabled = true; subscriptionSelect.title = "Login e verifica richiesti"; }
+        if(openShellButton) { openShellButton.disabled = true; setButtonLoading(openShellButton, false); openShellButton.title = "Login, verifica e seleziona"; }
+        if (usernameInput) { usernameInput.value = ''; usernameInput.disabled = false; }
+        if (passwordInput) { passwordInput.value = ''; passwordInput.disabled = false; }
+        if (loginButton) { loginButton.disabled = false; setButtonLoading(loginButton, false); }
+        if (signupButton) { signupButton.disabled = false; setButtonLoading(signupButton, false); }
+
+        logAuthMsg("Pronto. Effettua il login.", "gray");
+        logDashboardMsg("", "gray"); // Pulisci dashboard
+        updateWsStatus('disconnected');
+
+        // Disconnetti WebSocket e pulisci terminale
+        if (window.WebSocketManager) window.WebSocketManager.disconnectWebSocket("User logged out or reset state");
+        disposeTermListeners();
+        try { term?.clear(); } catch(e) { console.warn("Error clearing terminal on logout:", e); }
+        console.log("[UI] resetLoginState completato.");
+    }
+
+    function updateUILoginSuccess(address) {
+        console.log("[UI] Esecuzione updateUILoginSuccess...");
+        loggedInUserAddress = address;
+        const shortAddress = address ? `${address.substring(0, 6)}...${address.substring(address.length - 4)}` : 'Indirizzo non valido';
+
+        setActiveView('dashboard'); // Imposta la vista dashboard
+
+        // Nascondi launchControl inizialmente (è interno alla dashboard)
+        launchControl?.classList.add('hidden');
+
+        // Aggiorna Campi e Bottoni Dashboard
+        if(userEthAddressEl) { userEthAddressEl.textContent = shortAddress; userEthAddressEl.title = address; }
+        if(checkSubsButton) { checkSubsButton.disabled = false; setButtonLoading(checkSubsButton, false); checkSubsButton.title = "Verifica sottoscrizioni"; }
+        if(configureSubButton) { configureSubButton.disabled = false; }
+        if(subscriptionSelect) { subscriptionSelect.innerHTML = '<option value="">-- Verifica Sott. --</option>'; subscriptionSelect.disabled = true; subscriptionSelect.title = "Verifica richiesta"; }
+        if(openShellButton) { openShellButton.disabled = true; setButtonLoading(openShellButton, false); openShellButton.title = "Verifica e seleziona sottoscrizione"; }
+
+        // Disabilita campi/bottoni login (anche se la sezione è nascosta)
+        if (usernameInput) usernameInput.disabled = true;
+        if (passwordInput) passwordInput.disabled = true;
+        if (loginButton) loginButton.disabled = true;
+        if (signupButton) signupButton.disabled = true;
+
+        logDashboardMsg(`Login effettuato. Verifica le sottoscrizioni o configurane una nuova.`, "lime");
+        logAuthMsg("", "gray"); // Pulisci area messaggi auth
+        console.log("[UI] updateUILoginSuccess completato.");
+    }
+
+    // --- Gestione Dialogs ---
+    function openSubscribeDialog() {
+        if (!loggedInUserAddress) { showToast("Login richiesto per configurare.", "warning"); return; }
+        if (!subscribeDialog) { console.error("#subscribe-dialog non trovato!"); return; }
+        // Reset valori
+        if (subCpuRange && subCpuOutput) { subCpuRange.value = '200'; subCpuOutput.value = subCpuRange.value; }
+        if (subRamRange && subRamOutput) { subRamRange.value = '256'; subRamOutput.value = subRamRange.value; }
+        if (subStorageRange && subStorageOutput) { subStorageRange.value = '1'; subStorageOutput.value = subStorageRange.value; }
+        if (subDurationInput) subDurationInput.value = '3600';
+        if (subReplicasInput) subReplicasInput.value = '1';
+        if(selectedImageNameEl) selectedImageNameEl.textContent = selectedImageName;
+        setButtonLoading(confirmSubButton, false);
+        if (confirmSubButton) confirmSubButton.disabled = false;
+        try { subscribeDialog.showModal(); } catch(e) { console.error("Errore apertura dialog subscribe:", e); }
+    }
+    function closeSubscribeDialog() { subscribeDialog?.close(); }
+    function openImageSelectDialog() { imageSelectDialog?.showModal(); }
+    function closeImageSelectDialog() { imageSelectDialog?.close(); }
+
+    function updateSliderOutput(event) {
+         const slider = event.target;
+         const output = slider.parentElement?.querySelector(`output[for="${slider.id}"]`);
+         if (output) { output.value = slider.value; }
+     }
+
+    // --- Handler Eventi UI ---
+
+    async function onSignupClick(event) {
+        const button = event.currentTarget;
+        const username = usernameInput?.value.trim(); const password = passwordInput?.value.trim();
+        if (!username || !password) { showToast("Username e Password richiesti", "warning"); return; }
+        setButtonLoading(button, true); logAuthMsg("Signup in corso...", "cyan"); showLoading("Registrazione...");
+        if (window.API) {
+            const result = await window.API.doSignup(username, password, logAuthMsg, showErr);
+            if (result?.success) { showToast(`Signup successo: ${result.data?.message || 'OK'}`, 'success'); logAuthMsg("Signup completato. Effettua Login.", "lime"); }
+        } else { showErr("Errore", "Modulo API non disponibile"); }
+        setButtonLoading(button, false); hideLoading();
+    }
+
+    async function onLoginClick(event) {
+        const button = event.currentTarget;
+        const username = usernameInput?.value.trim(); const password = passwordInput?.value.trim();
+        if (!username || !password) { showToast("Username e Password richiesti", "warning"); return; }
+        setButtonLoading(button, true); logAuthMsg("Login in corso...", "cyan"); showLoading("Login...");
+        if (window.API) {
+            const result = await window.API.doLogin(username, password, logAuthMsg, showErr);
+            console.log(">>> [DEBUG] API.doLogin Result:", JSON.stringify(result));
+            if (result?.success && result.address) {
+                 console.log(">>> [DEBUG] Login Success, calling updateUILoginSuccess");
+                updateUILoginSuccess(result.address);
+                showToast(`Login effettuato`, 'success');
+            } else {
+                 console.warn(">>> [DEBUG] Login Failed or missing data:", result);
+                resetLoginState(); // Usa la nuova funzione per tornare alla vista auth
+                if (!result?.error) {
+                    showToast("Login fallito", 'error');
+                    logAuthMsg("Credenziali errate o problema API?", "red");
+                }
+            }
+        } else {
+            resetLoginState(); // Usa la nuova funzione per tornare alla vista auth
+            showErr("Errore", "Modulo API non disponibile");
+        }
+        setButtonLoading(button, false); hideLoading();
+    }
+
+    function onLogoutClick() {
+        console.log("[UI] Logout requested."); showToast("Logout effettuato.", "info");
+        resetLoginState(); // Usa la nuova funzione per tornare alla vista auth
+    }
+
+    function onConfigureSubClick() { openSubscribeDialog(); }
+
+    async function onConfirmSubClick(event) {
+         const button = event.currentTarget;
+         const username = usernameInput?.value.trim(); const password = passwordInput?.value.trim();
+         if (!loggedInUserAddress || !username || !password) { showToast("Login non valido o sessione scaduta.", "error"); return; }
+
+         const subDetails = {
+             durationSec: parseInt(subDurationInput?.value || '0'), replicas: parseInt(subReplicasInput?.value || '0'),
+             cpu: parseInt(subCpuRange?.value || '0'), ram: parseInt(subRamRange?.value || '0'),
+             storage: parseInt(subStorageRange?.value || '0'),
+             imageName: selectedImageName
+         };
+          if (!subDetails.durationSec || subDetails.durationSec < 600 || !subDetails.replicas || subDetails.replicas < 1 || !subDetails.cpu || subDetails.cpu < 100 || !subDetails.ram || subDetails.ram < 128 || isNaN(subDetails.storage) || subDetails.storage < 0) {
+             showToast("Valori di configurazione non validi.", "warning"); return;
+         }
+
+         setButtonLoading(button, true); logDashboardMsg("Invio richiesta sottoscrizione...", "cyan"); showLoading("Invio richiesta...");
+         if (window.API) {
+             const result = await window.API.subscribePodSlotAPI(username, password, subDetails, logDashboardMsg, showErr);
+             if (result?.success) {
+                showToast("Richiesta inviata con successo!", "success");
+                closeSubscribeDialog();
+                logDashboardMsg("Sottoscrizione richiesta. Verifica tra poco.", "lime");
+                setTimeout(() => {
+                    if (checkSubsButton && !checkSubsButton.disabled) {
+                         console.log("[UI] Triggering check subscriptions after successful request.");
+                         checkSubsButton.click();
+                    }
+                 }, 3000);
+             } else if (result?.stripeRedirect && result.url) {
+                 logDashboardMsg("Redirect a Stripe per pagamento...", "cyan");
+                 closeSubscribeDialog();
+                 window.location.href = result.url;
+             } else {
+                 showToast("Invio sottoscrizione fallito. Controlla i messaggi.", "error");
+             }
+         } else { showErr("Errore", "Modulo API non disponibile"); }
+         setButtonLoading(button, false); hideLoading();
+     }
+
+     function onSelectImageClick() { openImageSelectDialog(); }
+
+     function onImageCardSelect(event) {
+          const button = event.target.closest('.select-image-btn'); if (!button) return;
+          const card = button.closest('.image-card'); if (!card) return;
+          const imageName = card.dataset.imageName;
+          if (imageName && selectedImageNameEl) {
+              selectedImageName = imageName;
+              selectedImageNameEl.textContent = imageName;
+              showToast(`Immagine ${imageName} selezionata.`, 'info', 2000);
+          }
+          closeImageSelectDialog();
+     }
+
+     async function onCheckSubsClick(event) {
+        const button = event?.currentTarget || checkSubsButton; // Permette chiamata programmatica
+        if (!button) return;
+        if (!loggedInUserAddress) { showToast("Login richiesto.", "warning"); return; }
+        // NON usare username/password dai campi input qui
+        const username = usernameInput?.value.trim(); // <<< ANCORA INSICURO MA CONSISTENTE
+        const password = passwordInput?.value.trim(); // <<< ANCORA INSICURO MA CONSISTENTE
+        if (!username || !password) { showToast("Credenziali (placeholder) mancanti.", "warning"); return; }
+    
+        if(subscriptionSelect) { subscriptionSelect.innerHTML = '<option value="">-- Verifica... --</option>'; subscriptionSelect.disabled = true; }
+        if(openShellButton) openShellButton.disabled = true;
+        if(launchControl) { launchControl.classList.add('hidden'); } // Nascondi sempre all'inizio della verifica
+        selectedSubscriptionId = null;
+        setButtonLoading(button, true); logDashboardMsg(`Verifica sottoscrizioni...`, "cyan"); showLoading("Verifica...");
+        if (window.API) {
+            // Passa solo address, username/password dovrebbero essere nel token/sessione
+            const result = await window.API.checkSubscriptionsAPI(username, password, loggedInUserAddress, logDashboardMsg, showErr);
+    
+            // --- !!! AGGIUNGI QUESTO LOG !!! ---
+            console.log("[DEBUG] Risposta da API.checkSubscriptionsAPI:", JSON.stringify(result, null, 2));
+            // --- FINE LOG AGGIUNTO ---
+    
+            if (result?.success && Array.isArray(result.subscriptions)) {
+                 populateSubscriptionDropdown(result.subscriptions); // Passa l'array
+                 showToast(`Trovate ${result.subscriptions.length} sottoscrizioni.`, 'info');
+            } else {
+                 if(subscriptionSelect) subscriptionSelect.innerHTML = '<option value="">-- Errore o Nessuna --</option>'; // Messaggio più chiaro
+                 subscriptionSelect.disabled = true;
+                 openShellButton.disabled = true;
+                 // Non mostrare errore specifico se già gestito da showErr o se success=false ma senza errore specifico
+                 if (!result?.error && result?.success === false) {
+                     logDashboardMsg("Nessuna sottoscrizione trovata o verifica fallita.", "orange");
+                     showToast("Nessuna sottoscrizione trovata.", "info"); // Toast informativo invece di errore
+                 } else if (!result?.error) {
+                     logDashboardMsg("Errore durante la verifica delle sottoscrizioni.", "red");
+                 }
+                 launchControl?.classList.add('hidden'); // Assicura sia nascosto in caso di errore o nessuna sub
+            }
+        } else { showErr("Errore", "Modulo API non disponibile"); }
+        setButtonLoading(button, false); hideLoading();
+    }
+
+    function populateSubscriptionDropdown(subscriptionsData) {
+        if (!subscriptionSelect || !openShellButton || !launchControl) return;
+        subscriptionSelect.innerHTML = ''; let validAndActiveSubsFound = 0; let firstValidSubId = null;
+
+        if (!subscriptionsData || subscriptionsData.length === 0) {
+             logDashboardMsg("Nessuna sottoscrizione trovata.", "lime");
+             subscriptionSelect.innerHTML = '<option value="">-- Nessuna --</option>';
+             subscriptionSelect.disabled = true; openShellButton.disabled = true;
+             launchControl.classList.add('hidden'); // Nascondi se non ci sono sub
+             return;
+        }
+        logDashboardMsg(`Trovate ${subscriptionsData.length} sottoscrizioni. Filtraggio attive...`, "cyan");
+
+        subscriptionsData.forEach((subItem, index) => {
+            let actualSubId, displayText, isConsideredActive = false, detailsText = '';
+             if (typeof subItem === 'object' && subItem !== null && subItem.sub_id && subItem.status) {
+                try {
+                    actualSubId = subItem.sub_id.toString();
+                    const startTime = parseInt(subItem.start_time);
+                    const endTime = parseInt(subItem.end_time);
+                    const nowSeconds = Date.now() / 1000;
+                    const isActiveTime = nowSeconds >= startTime && nowSeconds < endTime;
+                    isConsideredActive = (subItem.status === 'approved' || subItem.status === 'active') && isActiveTime;
+                    const endDate = new Date(endTime * 1000);
+                    const statusText = isConsideredActive ? 'Attiva' : (subItem.status === 'pending' ? 'In attesa' : (isActiveTime ? `Stato: ${subItem.status}` : 'Scaduta')); // Info extra se non attiva
+                    detailsText = `CPU:${subItem.cpu || 'N/A'} RAM:${subItem.ram || 'N/A'} Stor:${subItem.storage || 'N/A'}Gb`;
+                    displayText = `Sub ${actualSubId} (${statusText}) - Scade: ${endDate.toLocaleDateString()} ${endDate.toLocaleTimeString()}`;
+       
+                    // --- !!! AGGIUNGI QUESTO LOG !!! ---
+                    console.log(`[DEBUG Populate Loop] Sub ${index} (ID: ${actualSubId}):`,
+                                `Status: ${subItem.status},`,
+                                `IsActiveTime: ${isActiveTime},`,
+                                `IsConsideredActive: ${isConsideredActive}`);
+                    // --- FINE LOG AGGIUNTO ---
+       
+                } catch (parseError) {
+                    isConsideredActive = false; actualSubId = undefined;
+                    console.warn(`[DEBUG Populate Loop] Errore parsing sub ${index} (ID: ${subItem.sub_id}):`, parseError, subItem);
+                    displayText = `Sub ${subItem.sub_id} (Errore dati)`;
+                }
+            } else {
+               console.warn(`[DEBUG Populate Loop] Formato sub ${index} non riconosciuto:`, subItem);
+               displayText = `Sottoscrizione ${index} (Formato errato)`;
+            }
+       
+            // Aggiungi solo quelle considerate attive al dropdown
+            if (isConsideredActive && actualSubId !== undefined) {
+                const option = document.createElement('option');
+                option.value = actualSubId;
+                option.textContent = displayText;
+                option.title = detailsText; // Aggiungi dettagli nel title
+                subscriptionSelect.appendChild(option);
+                if (validAndActiveSubsFound === 0) firstValidSubId = actualSubId;
+                validAndActiveSubsFound++;
+            }
+       }); // Fine forEach
+
+       if (validAndActiveSubsFound === 0) {
+        // Messaggio più specifico se l'API ha restituito qualcosa ma non era attivo
+        if (subscriptionsData && subscriptionsData.length > 0) {
+             logDashboardMsg(`Trovate ${subscriptionsData.length} sottoscrizioni, ma nessuna è attualmente attiva.`, "orange");
+             showToast("Nessuna sottoscrizione attiva trovata (controlla stato/scadenza).", "warning");
+             subscriptionSelect.innerHTML = '<option value="">-- Nessuna Attiva --</option>';
+        } else { // L'API non ha restituito nulla
+             logDashboardMsg("Nessuna sottoscrizione associata a questo account.", "lime");
+             showToast("Nessuna sottoscrizione trovata.", "info");
+             subscriptionSelect.innerHTML = '<option value="">-- Nessuna --</option>';
+        }
+        subscriptionSelect.disabled = true;
+        openShellButton.disabled = true;
+        launchControl.classList.add('hidden'); // Nascondi controlli
+     } else {
+        // Messaggio per quando almeno una è attiva
+        logDashboardMsg(`Trovate ${validAndActiveSubsFound} sottoscrizioni attive. Seleziona e lancia.`, "lime");
+        showToast(`Trovate ${validAndActiveSubsFound} sottoscrizioni attive.`, 'success'); // Toast di successo
+        subscriptionSelect.disabled = false; subscriptionSelect.title = "Seleziona sottoscrizione attiva";
+        openShellButton.disabled = false; openShellButton.title = "Lancia terminale per la sottoscrizione selezionata";
+        launchControl.classList.remove('hidden'); // Mostra controlli
+            if (firstValidSubId) {
+                subscriptionSelect.value = firstValidSubId;
+                selectedSubscriptionId = firstValidSubId;
+                 console.log("[UI] ID Sottoscrizione selezionato automaticamente:", selectedSubscriptionId);
+            } else {
+                openShellButton.disabled = true;
+            }
+            subscriptionSelect.removeEventListener('change', onSubscriptionChange); // Rimuovi per sicurezza
+            subscriptionSelect.addEventListener('change', onSubscriptionChange);
+         }
+    }
+
+    function onSubscriptionChange() {
+        selectedSubscriptionId = subscriptionSelect?.value;
+        console.log("[UI] ID Sottoscrizione cambiato:", selectedSubscriptionId);
+        openShellButton.disabled = !selectedSubscriptionId;
+        if (!selectedSubscriptionId) {
+            openShellButton.title = "Seleziona una sottoscrizione valida";
+        } else {
+            openShellButton.title = `Lancia terminale per sub ${selectedSubscriptionId}`;
+        }
+    }
+
+    function onOpenShellClick(event) {
+        const button = event.currentTarget;
+        if (!loggedInUserAddress) { showToast("Login richiesto.", "error"); term?.writeln("\r\n\x1b[31mERRORE: Login richiesto.\x1b[0m"); return; }
+        if (!selectedSubscriptionId) { showToast("Seleziona una sottoscrizione.", "error"); term?.writeln("\r\n\x1b[31mERRORE: Seleziona sottoscrizione.\x1b[0m"); return; }
+        const username = usernameInput?.value.trim(); const password = passwordInput?.value.trim();
+        if (!username || !password) { showToast("Credenziali (placeholder) mancanti.", "error"); term?.writeln("\r\n\x1b[31mERRORE: Credenziali mancanti.\x1b[0m"); return; }
+
+        setButtonLoading(button, true); logDashboardMsg(`Avvio shell per sub ${selectedSubscriptionId}...`, "cyan"); showLoading("Avvio shell...");
+        disposeTermListeners();
+        term?.clear();
+
+        setActiveView('terminal'); // Imposta la vista terminale
+
+        // fitAddon e focus vengono chiamati da setActiveView
+
+        term?.writeln(`\x1b[1;33m[Shell] Richiesta connessione per sub ID ${selectedSubscriptionId}...\x1b[0m\r\n`);
+
+        if (window.WebSocketManager) {
+            window.WebSocketManager.connectWebSocket(loggedInUserAddress, selectedSubscriptionId, username, password);
+        } else {
+            showErr("Errore", "WebSocketManager non disponibile");
+            setButtonLoading(button, false);
+            hideLoading();
+            setActiveView('dashboard'); // Torna alla dashboard in caso di errore WS
+        }
+        // Il bottone viene sbloccato/gestito da WebSocketManager
+        button.disabled = true; // Disabilita subito per prevenire doppi click
+    }
+
+    // --- NUOVA LOGICA: Gestione Chiusura Terminale ---
+    function onCloseTerminalClick() {
+        console.log("[UI] Close terminal requested.");
+
+        setActiveView('dashboard'); // Torna alla vista dashboard
+
+        // Pulisci Terminale
+        try { term?.clear(); } catch(e) { console.warn("Error clearing terminal on close:", e); }
+
+        // Disconnetti WebSocket e Listener
+        if (window.WebSocketManager) {
+            window.WebSocketManager.disconnectWebSocket("User closed terminal manually");
+        }
+        disposeTermListeners();
+
+        // Resetta lo stato dei bottoni nella dashboard
+        if(openShellButton) {
+            setButtonLoading(openShellButton, false);
+            // Riabilita SOLO se una sottoscrizione valida è ANCORA selezionata nel dropdown
+            openShellButton.disabled = !subscriptionSelect?.value;
+        }
+        // launchControl dovrebbe essere già visibile/nascosto correttamente da populateSubscriptionDropdown,
+        // ma possiamo assicurarci che sia visibile se ci sono opzioni valide
+        if (launchControl && subscriptionSelect && subscriptionSelect.options.length > 0 && subscriptionSelect.value) {
+            launchControl.classList.remove('hidden');
+        } else if (launchControl) {
+             launchControl.classList.add('hidden');
+        }
+
+
+        logDashboardMsg("Terminale chiuso. Seleziona una sottoscrizione per riconnetterti.", "cyan");
+        showToast("Terminale chiuso.", "info", 3000);
+    }
+
+
+    // --- Inizializzazione ---
+    function initDOMReferences() {
+        console.log("[UI] Inizializzazione riferimenti DOM...");
+        appContainer = document.querySelector('.app-container'); // NUOVO
+        usernameInput = document.getElementById('username');
+        passwordInput = document.getElementById('password');
+        userEthAddressEl = document.getElementById('userEthAddress');
+        signupButton = document.getElementById('signupButton');
+        loginButton = document.getElementById('loginButton');
+        logoutButton = document.getElementById('logoutButton');
+        configureSubButton = document.getElementById('configureSubButton');
+        checkSubsButton = document.getElementById('checkSubsButton');
+        subscriptionSelect = document.getElementById('availableSubscriptions');
+        openShellButton = document.getElementById('openShellButton');
+        launchControl = document.getElementById('launch-control'); // Interno, usa .hidden
+        authSection = document.getElementById('auth-section');
+        dashboardSection = document.getElementById('dashboard-section');
+        terminalContainer = document.getElementById('terminal-container');
+        terminalElement = document.getElementById('terminal');
+        // userStatusArea non più usato/trovato
+        wsStatusEl = document.getElementById('ws-status');
+        subscribeDialog = document.getElementById('subscribe-dialog');
+        cancelSubButton = document.getElementById('cancelSubButton');
+        confirmSubButton = document.getElementById('confirmSubButton');
+        selectImageButton = document.getElementById('selectImageButton');
+        imageSelectDialog = document.getElementById('image-select-dialog');
+        cancelImageSelect = document.getElementById('cancelImageSelect');
+        imageGrid = imageSelectDialog?.querySelector('.image-grid');
+        subCpuRange = document.getElementById('subCpuRange');
+        subCpuOutput = document.getElementById('subCpuOutput');
+        subRamRange = document.getElementById('subRamRange');
+        subRamOutput = document.getElementById('subRamOutput');
+        subStorageRange = document.getElementById('subStorageRange');
+        subStorageOutput = document.getElementById('subStorageOutput');
+        subDurationInput = document.getElementById('subDurationInput');
+        subReplicasInput = document.getElementById('subReplicasInput');
+        selectedImageNameEl = document.getElementById('selected-image-name');
+        loadingOverlay = document.getElementById('loading-overlay'); // Interno, usa .hidden
+        authMessagesEl = document.getElementById('auth-messages');
+        dashboardMessagesEl = document.getElementById('dashboard-messages');
+        toastContainer = document.getElementById('toast-container');
+        closeTerminalButton = document.getElementById('closeTerminalButton'); // Bottone chiusura
+
+        // Verifica elementi chiave
+        const essentialElements = [appContainer, authSection, dashboardSection, terminalContainer, loginButton, term, closeTerminalButton, launchControl, loadingOverlay]; // Aggiunti controlli
+        let missing = false;
+        essentialElements.forEach((el, index) => {
+            const names = ['appContainer', 'authSection', 'dashboardSection', 'terminalContainer', 'loginButton', 'term', 'closeTerminalButton', 'launchControl', 'loadingOverlay'];
+            if (!el) {
+                 console.error(`[UI] Elemento DOM essenziale mancante: ${names[index]}`);
+                 missing = true;
+            }
+        });
+         if(missing) return false; // Interrompi se manca qualcosa di fondamentale
+
+        console.log("[UI] Riferimenti DOM ottenuti.");
+        return true;
+    }
+
+    function attachEventListeners() {
+        console.log("[UI] Attaching event listeners...");
+        loginButton?.addEventListener('click', onLoginClick);
+        signupButton?.addEventListener('click', onSignupClick);
+        logoutButton?.addEventListener('click', onLogoutClick);
+        configureSubButton?.addEventListener('click', onConfigureSubClick);
+        confirmSubButton?.addEventListener('click', onConfirmSubClick);
+        cancelSubButton?.addEventListener('click', () => closeSubscribeDialog());
+        selectImageButton?.addEventListener('click', onSelectImageClick);
+        cancelImageSelect?.addEventListener('click', () => closeImageSelectDialog());
+        imageGrid?.addEventListener('click', onImageCardSelect);
+        checkSubsButton?.addEventListener('click', onCheckSubsClick);
+        openShellButton?.addEventListener('click', onOpenShellClick);
+        closeTerminalButton?.addEventListener('click', onCloseTerminalClick); // Listener per chiudere terminale
+        subCpuRange?.addEventListener('input', updateSliderOutput);
+        subRamRange?.addEventListener('input', updateSliderOutput);
+        subStorageRange?.addEventListener('input', updateSliderOutput);
+        // Listener per 'change' su subscriptionSelect è aggiunto/rimosso dinamicamente
+        console.log("[UI] Event listeners attached.");
+    }
+
+    function initializeUI() {
+        if (!domReady) { console.warn("[UI] DOM not ready for UI init."); return; }
+        console.log("[UI] Inizializzazione UI...");
+        try {
+            if (!initDOMReferences()) throw new Error("Elementi DOM essenziali mancanti. Controlla console.");
+            setupTerminal(); // Prima di WS Manager
+            if (window.WebSocketManager) {
+                // Dipendenze WebSocketManager (invariate o quasi)
+                window.WebSocketManager.setExternalDependencies(
+                    term, logDashboardMsg, showErr, disposeTermListeners, reattachTerminalListeners,
+                    // Funzione sblocco bottone (chiamata su close/error)
+                    () => {
+                        if(openShellButton) {
+                           setButtonLoading(openShellButton, false);
+                           // Riabilita se una sub è selezionata
+                           openShellButton.disabled = !selectedSubscriptionId;
+                        }
+                        hideLoading(); // Nascondi overlay generale
+                    },
+                     // Funzione blocco bottone (non strettamente necessaria, ma per coerenza)
+                    () => {
+                        if(openShellButton) setButtonLoading(openShellButton, true);
+                    },
+                    // Aggiunta callback per quando WS si connette con successo
+                    () => {
+                        hideLoading(); // Nascondi overlay generale quando la connessione ha successo
+                        if(openShellButton) setButtonLoading(openShellButton, false); // Sblocca bottone, ma lascialo disabilitato finché non si chiude
+                        console.log("[UI] WebSocket connected successfully, button unlocked (but kept disabled).");
+                         // Non serve riabilitare openShellButton qui, l'utente è nel terminale
+                         // openShellButton.disabled = false;
+                    }
+                );
+            } else {
+                 console.error("WebSocketManager non trovato! La connessione al terminale non funzionerà.");
+                 if(openShellButton) { openShellButton.disabled = true; openShellButton.title = "Errore: Modulo WebSocket mancante"; }
+                 if(checkSubsButton) checkSubsButton.disabled = true;
+            }
+            attachEventListeners();
+            resetLoginState(); // Imposta stato iniziale (mostra login)
+            console.log("[UI] Inizializzazione UI completata.");
+        } catch (error) {
+            console.error("[UI] Errore CRITICO inizializzazione UI:", error);
+            document.body.innerHTML = `<div style="padding: 20px; color: red; background: #333; border: 1px solid red;">Errore caricamento interfaccia: ${error.message}. Controlla console (F12).</div>`;
+        }
+    }
+
+    // --- Esecuzione Iniziale ---
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => { domReady = true; initializeUI(); });
+    } else {
+        domReady = true;
+        initializeUI();
+    }
+
+    // --- Cleanup ---
+    window.addEventListener('beforeunload', () => {
+        if (window.WebSocketManager) {
+            window.WebSocketManager.disconnectWebSocket("Navigating away or closing tab");
+        }
+        disposeTermListeners();
+        window.removeEventListener('resize', handleWindowResize);
+    });
+
+    // Esponi funzioni necessarie globalmente
+    window.UI = {
+        reattachTerminalListeners,
+        updateWsStatus,
+        showToast,
+        setButtonLoading,
+        hideLoading,
+        logDashboardMsg,
+        onCloseTerminalClick // Esponi per poterla chiamare da WS se necessario
+    };
+
+})(); // Fine IIFE

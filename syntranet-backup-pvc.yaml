@@ -1,0 +1,13 @@
+ # syntranet-backup-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: syntranet-backup      # Il nome che desideri per il nuovo PVC
+  namespace: syntracloud       # Il namespace corretto
+spec:
+  accessModes:
+    - ReadWriteOnce           # Modalità di accesso (comune per singolo pod)
+  storageClassName: standard   # Usa la stessa classe degli altri PVC che avevi (probabilmente corretta)
+  resources:
+    requests:
+      storage: 5Gi            # <<< Modifica qui la dimensione desiderata (es. 5Gi, 10Gi, 500Mi)

@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SyntraNet Dashboard - Live</title>
+    <style>
+        :root {
+            --primary-color: #0056b3; /* Dark Blue */
+            --secondary-color: #e2eafc; /* Lighter Blue */
+            --text-color: #333;
+            --border-color: #ccc;
+            --bg-color: #f4f4f4;
+            --card-bg: #fff;
+            --success-bg: #d4edda;
+            --success-color: #155724;
+            --success-border: #c3e6cb;
+            --error-bg: #f8d7da;
+            --error-color: #721c24;
+            --error-border: #f5c6cb;
+            --connecting-bg: #fff3cd;
+            --connecting-color: #856404;
+            --connecting-border: #ffeeba;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol"; margin: 0; padding: 0; background-color: var(--bg-color); color: var(--text-color); }
+        .header { background-color: var(--primary-color); color: white; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 1000;}
+        .header h1 { margin: 0; font-size: 1.5em; }
+        #status { font-size: 0.9em; padding: 5px 10px; border-radius: 4px; text-align: right; transition: background-color 0.3s ease, color 0.3s ease; }
+        #status.connected { background-color: var(--success-bg); color: var(--success-color); border: 1px solid var(--success-border); }
+        #status.disconnected { background-color: var(--error-bg); color: var(--error-color); border: 1px solid var(--error-border); }
+        #status.connecting { background-color: var(--connecting-bg); color: var(--connecting-color); border: 1px solid var(--connecting-border); }
+
+        .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; padding: 20px; max-width: 1920px; margin: 0 auto; }
+        .container { background-color: var(--card-bg); padding: 0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; display: flex; flex-direction: column; }
+        .container h2 { background-color: var(--secondary-color); color: var(--primary-color); margin: 0; padding: 12px 18px; font-size: 1.1em; border-bottom: 1px solid var(--border-color); }
+        .table-container { padding: 15px; overflow-x: auto; flex-grow: 1; } /* Allow horizontal scroll on tables */
+        table { width: 100%; border-collapse: collapse; margin-top: 0px; }
+        th, td { border: 1px solid #ddd; padding: 8px 10px; text-align: left; font-size: 0.85em; vertical-align: middle; }
+        th { background-color: #f0f4fa; color: #334; position: sticky; top: 0; /* Sticky headers within container */ }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+        .status-active, .connected-true { color: #28a745; font-weight: 600; }
+        .status-recovering, .status-backup { color: #fd7e14; font-weight: 600; }
+        .status-failed, .connected-false { color: #dc3545; font-weight: 600; }
+        .status-allocating, .status-verifying { color: #007bff; }
+        .resource-bar { background-color: #e9ecef; border-radius: .25rem; overflow: hidden; height: 1.2em; font-size: 0.8em; position: relative; border: 1px solid #ccc; margin: 2px 0; }
+        .resource-bar-fill { background-color: #007bff; height: 100%; transition: width 0.3s ease-in-out; display: flex; align-items: center; justify-content: center; color: white; overflow: hidden; white-space: nowrap; font-size: 0.9em; }
+        .resource-bar-text { position: absolute; left: 5px; top: 0; line-height: 1.2em; color: #555; }
+        .details { font-size: 0.8em; color: #666; margin-top: 3px; }
+        code { background-color: #eee; padding: 2px 4px; border-radius: 3px; font-size: 0.9em; word-break: break-all; }
+        ul { padding-left: 18px; margin: 3px 0; font-size: 0.9em; }
+        li { margin-bottom: 2px; }
+        .no-data-row td { text-align: center; color: #777; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <h1>SyntraNet Dashboard</h1>
+        <div id="status">Initializing...</div>
+    </header>
+
+    <div class="dashboard-grid" >
+
+        <div class="container">
+            <h2>System Summary</h2>
+            <div class="table-container">
+                <p style="font-size:0.9em; text-align:center; margin-bottom:10px;">Last Update: <span id="summary-last-update">N/A</span></p>
+                <table>
+                    <tbody>
+                        <tr><td>Total Contributors</td><td id="summary-total-contributors">0</td></tr>
+                        <tr><td>Connected Contributors</td><td id="summary-connected-contributors">0</td></tr>
+                        <tr><td>Total Client Sessions</td><td id="summary-total-clients">0</td></tr>
+                        <tr><td>Connected Client Sessions</td><td id="summary-connected-clients">0</td></tr>
+                        <tr><td>Total Advertised RAM</td><td id="summary-total-ram">0 MiB</td></tr>
+                        <tr><td>Total Advertised CPU</td><td id="summary-total-cpu">0 mCPU</td></tr>
+                        <tr><td>Total Available RAM</td><td id="summary-available-ram">0 MiB</td></tr>
+                        <tr><td>Total Available CPU</td><td id="summary-available-cpu">0 mCPU</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="container">
+            <h2>Contributors</h2>
+            <div class="table-container">
+                <table id="contributors-table">
+                    <thead>
+                        <tr>
+                            <th>Node ID</th>
+                            <th>Status</th>
+                            <th>Provider Addr</th>
+                            <th>Advertised</th>
+                            <th>Available</th>
+                            <th>Usage</th>
+                            <th>Terminals</th>
+                            <th>Last Seen</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <tr class="no-data-row"><td colspan="9">Waiting for connection...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="container">
+            <h2>Client Sessions</h2>
+             <div class="table-container">
+                <table id="clients-table">
+                    <thead>
+                        <tr>
+                            <th>Client ID</th>
+                            <th>Status</th>
+                            <th>User Address</th>
+                            <th>Host Node</th>
+                            <th>Pod Name</th>
+                            <th>Resources</th>
+                            <th>Backup</th>
+                        <th>Details</th>
+                        <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="no-data-row"><td colspan="8">Waiting for connection...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        // IMPORTANT: Change this URL if your api.js server is running elsewhere
+        const API_WEBSOCKET_URL = 'https://syntranetwork.loca.lt';
+        // --- End Configuration ---
+
+        const statusDiv = document.getElementById('status');
+        const summaryLastUpdate = document.getElementById('summary-last-update');
+        const summaryTotalContributors = document.getElementById('summary-total-contributors');
+        const summaryConnectedContributors = document.getElementById('summary-connected-contributors');
+        const summaryTotalClients = document.getElementById('summary-total-clients');
+        const summaryConnectedClients = document.getElementById('summary-connected-clients');
+        const summaryTotalRam = document.getElementById('summary-total-ram');
+        const summaryTotalCpu = document.getElementById('summary-total-cpu');
+        const summaryAvailableRam = document.getElementById('summary-available-ram');
+        const summaryAvailableCpu = document.getElementById('summary-available-cpu');
+        const contributorsTableBody = document.getElementById('contributors-table').querySelector('tbody');
+        const clientsTableBody = document.getElementById('clients-table').querySelector('tbody');
+
+        let ws;
+        let reconnectTimeout;
+
+        function formatTimestamp(ts) {
+            if (!ts) return 'N/A';
+            try {
+                return new Date(ts).toLocaleString();
+            } catch (e) { return 'Invalid Date'; }
+        }
+
+        function formatResources(ramStr, cpuStr) {
+            const ramMi = parseResourceValue(ramStr || '0Mi');
+            const cpuM = parseResourceValue(cpuStr || '0m');
+            return `${ramMi} MiB / ${cpuM} mCPU`;
+        }
+
+        function parseResourceValue(valueStr) {
+            if (typeof valueStr !== 'string' || !valueStr) return 0;
+            const value = parseFloat(valueStr);
+            if (isNaN(value)) return 0;
+            const lowerStr = valueStr.toLowerCase();
+            if (lowerStr.endsWith('gi')) return Math.floor(value * 1024);
+            if (lowerStr.endsWith('mi')) return Math.floor(value);
+            if (lowerStr.endsWith('ki')) return Math.floor(value / 1024);
+            if (lowerStr.endsWith('c') || /^\d+(\.\d+)?$/.test(valueStr)) return Math.floor(value * 1000);
+            if (lowerStr.endsWith('m')) return Math.floor(value);
+            return Math.floor(value);
+        }
+
+        function createResourceBar(available, total) {
+            const totalVal = parseResourceValue(total);
+            const availableVal = parseResourceValue(available);
+            if (totalVal <= 0) {
+                return `<div class="resource-bar"><div class="resource-bar-text">N/A</div></div>`;
+            }
+            const usedVal = Math.max(0, totalVal - availableVal); // Ensure used isn't negative
+            const usagePercent = ((usedVal / totalVal) * 100);
+            const usagePercentFixed = usagePercent.toFixed(1);
+            const text = `${usedVal.toFixed(0)} / ${totalVal.toFixed(0)} Used`;
+
+            const bar = document.createElement('div');
+            bar.className = 'resource-bar';
+            bar.title = text + ` (${usagePercentFixed}%)`; // Tooltip for details
+
+            const fill = document.createElement('div');
+            fill.className = 'resource-bar-fill';
+            fill.style.width = `${Math.min(100, Math.max(0, usagePercent))}%`; // Clamp between 0 and 100
+            if (usagePercent > 15) { // Show % only if reasonably wide
+                fill.textContent = `${usagePercentFixed}%`;
+            }
+
+            const textSpan = document.createElement('span');
+            textSpan.className = 'resource-bar-text';
+            textSpan.textContent = text;
+
+            bar.appendChild(fill);
+            bar.appendChild(textSpan);
+            return bar.outerHTML;
+        }
+
+        function updateSummary(summary) {
+            if (!summary) return;
+            summaryLastUpdate.textContent = formatTimestamp(summary.timestamp);
+            summaryTotalContributors.textContent = summary.totalContributors ?? 'N/A';
+            summaryConnectedContributors.textContent = summary.connectedContributors ?? 'N/A';
+            summaryTotalClients.textContent = summary.totalClients ?? 'N/A';
+            summaryConnectedClients.textContent = summary.connectedClients ?? 'N/A';
+            summaryTotalRam.textContent = `${summary.totalAdvertisedRamMi ?? 0} MiB`;
+            summaryTotalCpu.textContent = `${summary.totalAdvertisedCpuM ?? 0} mCPU`;
+            summaryAvailableRam.textContent = `${summary.totalAvailableRamMi ?? 0} MiB`;
+            summaryAvailableCpu.textContent = `${summary.totalAvailableCpuM ?? 0} mCPU`;
+        }
+
+        function updateContributorsTable(contributors) {
+            contributorsTableBody.innerHTML = '';
+            if (!contributors || contributors.length === 0) {
+                contributorsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="8">No contributors data received yet.</td></tr>';
+                return;
+            }
+
+            contributors.sort((a, b) => a.id.localeCompare(b.id)).forEach(node => {
+                const row = contributorsTableBody.insertRow();
+                row.innerHTML = `
+                    <td><code>${node.id}</code></td>
+                    <td class="connected-${node.connected}">${node.connected ? 'Connected' : 'Disconnected'}</td>
+                    <td><code>${node.address || 'N/A'}</code></td>
+                    <td>${formatResources(node.totalRam, node.totalCpu)}</td>
+                    <td>${formatResources(node.availableRam, node.availableCpu)}</td>
+                    <td style="min-width: 150px;">
+                        ${createResourceBar(node.availableRam, node.totalRam)}
+                        ${createResourceBar(node.availableCpu, node.totalCpu)}
+                    </td>
+                    <td>
+                        ${node.activeTerminalsCount ?? 0}
+                        ${(node.activeTerminalsCount ?? 0) > 0 ? `<ul>${(node.activeTerminalIds || []).map(id => `<li><code>${id}</code></li>`).join('')}</ul>` : ''}
+                    </td>
+                    <td title="${formatTimestamp(node.lastSeen)}">${node.lastSeenAgo || 'N/A'}</td>
+                `;
+            });
+        }
+
+        function updateClientsTable(clients) {
+            clientsTableBody.innerHTML = '';
+            if (!clients || clients.length === 0) {
+                clientsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="9">No client sessions data received yet.</td></tr>';
+                return;
+            }
+
+            clients.sort((a, b) => a.id.localeCompare(b.id)).forEach(session => {
+                const row = clientsTableBody.insertRow();
+                const backupStatus = session.lastBackupCid && session.lastBackupCid !== 'N/A'
+                    ? `<span title="CID: ${session.lastBackupCid}">Last: ${session.lastBackupTimestampStr || 'N/A'}</span>`
+                    : 'No Backup';
+                row.innerHTML = `
+                    <td><code>${session.id}</code></td>
+                    <td class="status-${session.status || 'unknown'} connected-${session.connected}">
+                        ${session.status || 'Unknown'} ${!session.connected ? '(WS Closed)' : ''}
+                    </td>
+                    <td><code>${session.userAddress || 'N/A'}</code></td>
+                    <td><code>${session.contributorId || 'N/A'}</code></td>
+                    <td><code>${session.podName || 'N/A'}</code></td>
+                    <td>${formatResources((session.requestedRamMi || 0) + 'Mi', (session.requestedCpuM || 0) + 'm')}</td>
+                    <td class="${session.backupInProgress ? 'status-backup' : ''}">
+                        ${session.backupInProgress ? 'In Progress...' : backupStatus}
+                    </td>
+                    <td>
+                        PTY: ${session.ptyExists ? (session.ptyAlive ? 'Alive' : 'Dead') : 'No'}
+                        ${session.status === 'recovering' ? `<br>Attempt: ${session.recoveryAttempt || 0}` : ''}
+                    </td>
+                    <td>
+                        <button class="stop-btn" data-session-id="${session.id}">Stop</button>
+                    </td>
+                `;
+            });
+        }
+
+        function connectWebSocket() {
+            clearTimeout(reconnectTimeout); // Clear any pending reconnect
+            console.log(`Attempting to connect to WebSocket at: ${API_WEBSOCKET_URL}`);
+            statusDiv.textContent = `Connecting to ${API_WEBSOCKET_URL}...`;
+            statusDiv.className = 'connecting';
+
+            // Clear tables while attempting connection
+            contributorsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="8">Connecting...</td></tr>';
+            clientsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="9">Connecting...</td></tr>';
+
+
+            ws = new WebSocket(API_WEBSOCKET_URL);
+
+            ws.onopen = () => {
+                console.log('WebSocket connection established.');
+                statusDiv.textContent = 'Connected - Requesting data...';
+                statusDiv.className = 'connected';
+                ws.send(JSON.stringify({ type: 'request_dashboard_updates' }));
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const message = JSON.parse(event.data);
+                     console.log('Message received:', message.type); // Log message type
+
+                    if (message.type === 'dashboard_update' && message.state) {
+                         if (typeof message.state === 'object' && message.state !== null &&
+                            'summary' in message.state && 'contributors' in message.state && 'clients' in message.state)
+                        {
+                            const { summary, contributors, clients } = message.state;
+                            updateSummary(summary);
+                            updateContributorsTable(contributors);
+                            updateClientsTable(clients);
+                            summaryLastUpdate.textContent = formatTimestamp(Date.now()); // Use local time for last update received
+                            statusDiv.textContent = 'Connected - Data Received'; // Update status
+                            statusDiv.className = 'connected';
+                        } else {
+                             console.warn('Received dashboard_update but state structure is invalid:', message.state);
+                        }
+                    } else {
+                        console.log('Received unhandled message type:', message.type);
+                    }
+                } catch (error) {
+                    console.error('Error parsing WebSocket message or updating dashboard:', error);
+                    console.error('Raw message data:', event.data ? event.data.substring(0, 500) + '...' : 'null'); // Log raw data on error
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket Error:', error);
+                // Don't schedule reconnect here, onclose will handle it
+            };
+
+            ws.onclose = (event) => {
+                console.log(`WebSocket connection closed. Code: ${event.code}, Reason: "${event.reason}". Attempting reconnect...`);
+                statusDiv.textContent = `Disconnected (Code: ${event.code}). Reconnecting...`;
+                statusDiv.className = 'disconnected';
+                // Clear tables on disconnect
+                contributorsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="8">Disconnected. Waiting to reconnect...</td></tr>';
+                clientsTableBody.innerHTML = '<tr class="no-data-row"><td colspan="9">Disconnected. Waiting to reconnect...</td></tr>';
+
+                // Simple exponential backoff might be better, but this is basic
+                clearTimeout(reconnectTimeout); // Ensure no duplicates
+                reconnectTimeout = setTimeout(connectWebSocket, 5000); // Try reconnecting after 5 seconds
+            };
+        }
+
+        // Initial connection attempt when the script loads
+        connectWebSocket();
+        // Handle Stop button clicks in client sessions table
+        clientsTableBody.addEventListener('click', function(event) {
+            if (event.target && event.target.classList.contains('stop-btn')) {
+                const clientId = event.target.getAttribute('data-session-id');
+                console.log('Dashboard: Stop requested for session', clientId);
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'terminate_session', clientId }));
+                } else {
+                    console.warn('Cannot send terminate request, WebSocket not open');
+                }
+            }
+        });
+
+    </script>
+
+</body>
+</html>

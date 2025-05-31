@@ -1,0 +1,34 @@
+// .eslintrc.json
+{
+    "env": {
+      "browser": true, // Allows browser globals like 'document', 'window'
+      "node": true,    // Allows Node.js globals like 'require', 'process'
+      "es2021": true   // Enables modern ECMAScript syntax
+    },
+    "extends": [
+      "eslint:recommended",      // Basic ESLint recommended rules
+      "plugin:prettier/recommended" // Enables eslint-plugin-prettier and eslint-config-prettier (MUST BE LAST!)
+    ],
+    "parserOptions": {
+      "ecmaVersion": "latest", // Use the latest ECMAScript standard
+      "sourceType": "module"   // Use ES modules (import/export) if applicable in your JS
+    },
+    "plugins": [
+      "html" // Enable the HTML plugin to lint script tags
+      // 'prettier' plugin is included by 'plugin:prettier/recommended'
+    ],
+    "rules": {
+      // Add any specific ESLint rule overrides here if needed.
+      // Examples:
+      // "no-console": "warn", // Warn about console.log statements
+      // "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }] // Warn about unused vars, ignore if starts with _
+      "prettier/prettier": "warn" // Show Prettier formatting issues as warnings
+    },
+    "ignorePatterns": [
+      "node_modules/", // Always ignore node_modules
+      "dist/",         // Ignore build output (if you have it)
+      "build/",        // Ignore build output (if you have it)
+      "SyntraCloud/"  // Example: Ignore the backend if you only want to lint frontend for now
+                      // Adjust this based on what you want to lint
+    ]
+  }

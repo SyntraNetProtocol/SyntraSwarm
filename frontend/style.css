@@ -1,0 +1,551 @@
+/* Stili Generali e Variabili (Mantenuti dal tuo CSS originale) */
+:root {
+    --primary-color: #39c5cf; /* Cyan acceso */
+    --secondary-color: #6e7681; /* Grigio GitHub */
+    --background-color: #0d1117; /* Sfondo scuro GitHub */
+    --card-background: #161b22; /* Sfondo card GitHub */
+    --text-color: #c9d1d9; /* Testo chiaro GitHub */
+    --border-color: #30363d; /* Bordo GitHub */
+    --accent-color: var(--primary-color);
+    --accent-orange: #f78166; /* Arancio GitHub */
+    --error-color: #f85149; /* Rosso GitHub */
+    --success-color: #56d364; /* Verde GitHub */
+    --warning-color: #d29922; /* Giallo GitHub */
+    --font-family: 'Rajdhani', sans-serif;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-family);
+    background-color: var(--background-color);
+    color: var(--text-color);
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+/* --- Layout Principale e Gestione Viste con data-active-view --- */
+
+.app-container {
+    display: flex; /* Necessario affinché le sezioni figlie occupino spazio */
+    flex-direction: column; /* O row, a seconda del layout desiderato */
+    min-height: 100vh; /* Occupa almeno tutta l'altezza */
+    width: 100%;
+    overflow-x: hidden; /* Evita barre di scorrimento orizzontali */
+}
+
+/* Nascondi TUTTE le sezioni principali di default */
+.app-container > #auth-section,
+.app-container > #dashboard-section,
+.app-container > #terminal-container {
+    display: none; /* Nascondi per default */
+}
+
+/* Mostra la sezione AUTENTICAZIONE quando data-active-view è "auth" */
+.app-container[data-active-view="auth"] > #auth-section {
+    display: flex; /* Usa flex per centrare la card */
+    flex-direction: column;
+    justify-content: center; /* Centra verticalmente */
+    align-items: center; /* Centra orizzontalmente */
+    min-height: 100vh; /* Occupa l'intera altezza */
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+/* Mostra la sezione DASHBOARD quando data-active-view è "dashboard" */
+.app-container[data-active-view="dashboard"] > #dashboard-section {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    flex-grow: 1; /* Occupa lo spazio rimanente se necessario */
+}
+
+/* Mostra la sezione TERMINALE quando data-active-view è "terminal" */
+.app-container[data-active-view="terminal"] > #terminal-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1; /* Fa espandere il terminale per occupare lo spazio */
+    height: 100vh; /* Forza l'altezza a tutta la viewport */
+    width: 100%;
+    overflow: hidden; /* Nasconde eventuale overflow della sezione stessa */
+}
+
+/* --- Stili Sezioni Specifiche (Adatta dal tuo CSS originale) --- */
+
+/* Auth Card */
+.auth-card {
+    background-color: var(--card-background);
+    padding: 30px 40px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    max-width: 450px; /* Larghezza massima card login */
+    width: 100%;
+    box-shadow: 0 4px 15px rgb(0 0 0 / 20%);
+    text-align: center;
+}
+
+.auth-card .logo {
+    font-size: 2.5em;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--text-color);
+}
+.auth-card .logo .accent { color: var(--accent-color); }
+
+.auth-card h2 {
+    margin-bottom: 25px;
+    color: var(--secondary-color);
+    font-weight: 500;
+}
+
+/* Dashboard */
+.dashboard {
+    /* Stili generali dashboard */
+}
+
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 25px;
+    background-color: var(--card-background);
+    border-bottom: 1px solid var(--border-color);
+}
+.user-info { display: flex; align-items: center; gap: 10px; }
+.user-icon { font-size: 1.4em; color: var(--primary-color); }
+#userEthAddress { font-weight: 600; font-size: 0.9em; }
+.status-indicators { display: flex; align-items: center; gap: 15px; }
+.ws-status-indicator { font-size: 1.2em; transition: color 0.3s ease; }
+.ws-status-indicator.connected { color: var(--success-color); }
+.ws-status-indicator.disconnected { color: var(--error-color); }
+.ws-status-indicator.connecting { color: var(--warning-color); animation: pulse 1.5s infinite ease-in-out; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+.dashboard-content {
+    padding: 30px;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); /* Layout a griglia responsivo */
+    gap: 25px;
+    flex-grow: 1;
+}
+
+.action-card {
+    background-color: var(--card-background);
+    padding: 25px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+}
+
+.action-card h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: var(--primary-color);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.action-card h3 .accent-orange { color: var(--accent-orange); }
+
+.action-card p {
+    margin-bottom: 20px;
+    font-size: 0.95em;
+    color: var(--secondary-color);
+}
+
+.launch-control {
+    margin-top: 15px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.launch-control select { /* Stile per il select */
+    flex-grow: 1;
+    padding: 8px 12px;
+    background-color: #21262d; /* Sfondo input GitHub */
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    border-radius: 6px;
+    font-family: var(--font-family);
+}
+.launch-control select:disabled { background-color: #30363d; cursor: not-allowed; }
+
+/* Terminal Section */
+.terminal-section {
+    /* Già gestito da [data-active-view="terminal"] */
+}
+
+.terminal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 15px;
+    background-color: #1f242c; /* Leggermente diverso per distinguerlo */
+    border-bottom: 1px solid var(--border-color);
+    color: var(--secondary-color);
+    flex-shrink: 0; /* Impedisce all'header di restringersi */
+}
+
+.terminal-header span {
+    font-weight: 600;
+    font-size: 0.9em;
+}
+
+#closeTerminalButton {
+    /* Stili base già presenti da .button, .button-icon-only etc. */
+
+    /* Puoi aggiungere override specifici se necessario */
+}
+
+#terminal {
+    flex-grow: 1; /* Fa espandere il contenitore del terminale */
+    padding: 10px; /* Spazio interno per il terminale */
+    box-sizing: border-box;
+    overflow: hidden; /* Nasconde le scrollbar del div, xterm le gestisce internamente */
+    height: 100%; /* Necessario per xterm-addon-fit */
+    width: 100%;
+}
+
+/* Assicurati che il viewport di xterm occupi tutto #terminal */
+#terminal .xterm .xterm-viewport {
+    width: 100% !important; /* Forzatura se necessario */
+    height: 100% !important;
+    overflow-y: scroll; /* O auto, gestita da xterm */
+}
+
+#terminal .xterm .xterm-screen {
+     width: 100% !important;
+     height: 100% !important;
+}
+
+
+/* --- Componenti UI (Input, Bottoni, Messaggi, etc. - Adatta dal tuo CSS) --- */
+
+.input-group {
+    margin-bottom: 20px;
+    position: relative;
+}
+
+.input-group .icon {
+    position: absolute;
+    left: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--secondary-color);
+}
+
+.input-group input[type="text"],
+.input-group input[type="password"],
+.input-group input[type="number"] {
+    width: 100%;
+    padding: 12px 15px 12px 45px; /* Spazio per icona */
+    background-color: #21262d; /* Sfondo input GitHub */
+    border: 1px solid var(--border-color);
+    color: var(--text-color);
+    border-radius: 6px;
+    font-family: var(--font-family);
+    font-size: 1em;
+    box-sizing: border-box;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-group input:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 2px rgb(57 197 207 / 30%);
+}
+.input-group.inline { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.input-group.inline label { width: auto; margin-bottom: 0; flex-shrink: 0; }
+.input-group.inline input { width: auto; flex-grow: 1; padding-left: 15px; } /* No icon */
+
+.button-group {
+    display: flex;
+    gap: 15px;
+    justify-content: center; /* Centra i bottoni nel login */
+    margin-top: 25px;
+}
+
+.button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-family: var(--font-family);
+    font-size: 1em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    position: relative;
+    overflow: hidden; /* Per spinner */
+}
+.button:active { transform: scale(0.98); }
+.button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.button-primary { background-color: var(--primary-color); color: var(--background-color); }
+.button-primary:not(:disabled):hover { background-color: #60dde9; box-shadow: 0 2px 8px rgb(57 197 207 / 30%); }
+.button-secondary { background-color: #21262d; color: var(--text-color); border: 1px solid var(--border-color); }
+.button-secondary:not(:disabled):hover { background-color: #30363d; }
+.button-danger { background-color: var(--error-color); color: white; }
+.button-danger:not(:disabled):hover { background-color: #d83c33; box-shadow: 0 2px 8px rgb(248 81 73 / 30%); }
+
+.button-icon-only { padding: 8px; width: 36px; height: 36px; font-size: 1.1em; }
+.button-small { padding: 5px 10px; font-size: 0.85em; gap: 5px; }
+
+.button-with-icon .button-icon { font-size: 1.1em; }
+.button-with-icon .button-text { transition: opacity 0.2s ease; }
+
+/* Spinner per bottoni */
+.spinner {
+    display: none; /* Nascosto di default */
+    border: 2px solid rgb(255 255 255 / 30%);
+    border-radius: 50%;
+    border-top-color: #fff; /* Colore spinner primario */
+    width: 16px;
+    height: 16px;
+    animation: spin 1s linear infinite;
+    position: absolute; /* Posizionato sopra il testo/icona */
+    left: 50%;
+    top: 50%;
+    margin-left: -8px;
+    margin-top: -8px;
+}
+
+.button.loading { /* Quando il bottone è in caricamento */
+    pointer-events: none; /* Disabilita click */
+    color: transparent !important; /* Nasconde testo e icona */
+}
+
+.button.loading .button-text,
+.button.loading .button-icon {
+    opacity: 0; /* Nasconde testo/icona */
+}
+
+.button.loading .spinner {
+    display: block; /* Mostra lo spinner */
+}
+
+/* Colore spinner per bottoni secondari/danger */
+.button-secondary.loading .spinner { border-top-color: var(--primary-color); }
+.button-danger.loading .spinner { border-top-color: #fff; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Area Messaggi */
+.message-area {
+    margin-top: 20px;
+    padding: 10px;
+    border-radius: 4px;
+    font-size: 0.9em;
+    text-align: center;
+    min-height: 1.5em; /* Altezza minima per evitare salti */
+    transition: background-color 0.3s ease, color 0.3s ease;
+    background-color: transparent; /* Sfondo trasparente di default */
+    color: var(--secondary-color);
+}
+.message-area.color-cyan { color: var(--primary-color); background-color: rgb(57 197 207 / 10%); }
+.message-area.color-lime { color: var(--success-color); background-color: rgb(86 211 100 / 10%); }
+.message-area.color-red { color: var(--error-color); background-color: rgb(248 81 73 / 10%); }
+.message-area.color-orange { color: var(--warning-color); background-color: rgb(210 153 34 / 10%); }
+.message-area.color-gray { color: var(--secondary-color); }
+
+/* --- Dialogs (Mantenuti dal CSS originale) --- */
+dialog {
+    background-color: var(--card-background);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 0; /* Padding gestito da .dialog-form */
+    max-width: 600px;
+    width: 90%;
+    box-shadow: 0 8px 30px rgb(0 0 0 / 30%);
+}
+
+dialog::backdrop {
+    background-color: rgb(0 0 0 / 60%);
+    backdrop-filter: blur(3px);
+}
+.dialog-form { padding: 30px; }
+
+.dialog-title {
+    margin-top: 0;
+    margin-bottom: 25px;
+    color: var(--primary-color);
+    font-size: 1.5em;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.dialog-section { margin-bottom: 25px; }
+.dialog-label { display: block; margin-bottom: 10px; font-weight: 600; color: var(--secondary-color); }
+.image-selector-display { display: flex; align-items: center; gap: 15px; }
+#selected-image-name { font-weight: 600; font-size: 1.1em; }
+.slider-group { margin-bottom: 15px; }
+.slider-group label { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+.slider-group i { color: var(--primary-color); }
+.slider-group output { font-weight: 600; min-width: 40px; text-align: right; }
+.slider-group input[type="range"] { width: 100%; accent-color: var(--primary-color); }
+.slider-group small { font-size: 0.8em; color: var(--secondary-color); margin-left: 5px; }
+
+.dialog-actions {
+    margin-top: 30px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 15px;
+}
+
+/* Image Select Dialog */
+.image-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 5px; /* Spazio per scrollbar */
+}
+
+.image-card {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    background-color: "transparent";
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.image-card:hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgb(0 0 0 / 20%); }
+.image-logo { width: 50px; height: 50px; border-radius: 50%; margin-bottom: 10px; object-fit: cover; background-color: "transparent"; }
+.image-details { flex-grow: 1; margin-bottom: 15px; }
+.image-title { margin: 5px 0; font-size: 1.1em; font-weight: 600; }
+.image-description { font-size: 0.85em; color: var(--secondary-color); margin-bottom: 8px; }
+
+.image-category {
+    font-size: 0.75em;
+    padding: 2px 6px;
+    background-color: var(--primary-color);
+    color: var(--background-color);
+    border-radius: 4px;
+    display: inline-block;
+}
+.select-image-btn { width: 100%; } /* Bottone occupa tutta larghezza card */
+
+/* --- Toast Notifications --- */
+#toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1050; /* Sopra altri elementi */
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.toast {
+    background-color: var(--card-background);
+    color: var(--text-color);
+    padding: 12px 20px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    border-left-width: 5px; /* Bordo colorato a sinistra */
+    box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+    opacity: 0;
+    transform: translateX(100%);
+    transition: opacity 0.4s ease, transform 0.4s ease;
+    cursor: pointer;
+    min-width: 250px;
+    max-width: 400px;
+}
+
+.toast.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+.toast-info { border-left-color: var(--primary-color); }
+.toast-success { border-left-color: var(--success-color); }
+.toast-warning { border-left-color: var(--warning-color); }
+.toast-error { border-left-color: var(--error-color); }
+.toast-message { font-size: 0.95em; }
+
+/* --- Loading Overlay --- */
+#loading-overlay {
+    position: fixed;
+    inset: 0; /* Top, Right, Bottom, Left = 0 */
+    background-color: rgb(0 0 0 / 70%);
+    backdrop-filter: blur(3px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 1100; /* Sopra tutto */
+    color: white;
+    transition: opacity 0.3s ease;
+}
+
+#loading-overlay.hidden {
+    opacity: 0;
+    pointer-events: none; /* Non interagibile quando nascosto */
+}
+
+#loading-overlay .spinner.large {
+    width: 50px;
+    height: 50px;
+    border-width: 4px;
+    margin-bottom: 15px;
+}
+
+#loading-overlay p {
+    font-size: 1.1em;
+    font-weight: 500;
+}
+
+/* --- Elementi interni ancora gestiti con .hidden (es. launch-control) --- */
+.hidden {
+    display: none !important; /* Usa !important se serve per sovrascrivere */
+}
+/* --- Lista delle sessioni attive sotto il controllo di launch --- */
+.active-sessions-list {
+    margin-top: 12px;
+    background-color: #171717;
+    padding: 10px;
+    border-radius: 6px;
+}
+.session-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    background-color: #272727;
+    color: #eee;
+}
+.session-item span {
+    flex: 1;
+    font-size: 0.95em;
+}
+.session-stop-btn {
+    margin-left: 8px;
+    background-color: #c0392b;
+    color: #fff;
+}
+/* Play (reattach) button */
+.session-play-btn {
+    margin-left: 4px;
+    background-color: #27ae60;
+    color: #fff;
+}
+.no-sessions, .error-sessions {
+    font-style: italic;
+    color: #666;
+    padding: 4px 8px;
+}
+
+
+
+
+
