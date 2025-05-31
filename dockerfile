@@ -1,47 +1,77 @@
-# Scegli un'immagine base. node:20-alpine è buona per Node.js e leggera.
+# Fase 1: Build Base e Installazione Dipendenze
 FROM node:20-alpine AS base
 
-# ARG per flessibilità
-ARG KUBECTL_VERSION=v1.28.2 # Scegli la versione di kubectl che ti serve
+# Argomenti di build
+ARG KUBECTL_VERSION=v1.28.2
 ARG GIT_REPO_URL=https://github.com/SyntraNetProtocol/SyntraSwarm.git
-ARG GIT_BRANCH=main # O un branch/tag specifico
-ARG APP_SUB_DIR=backend/master
+ARG GIT_BRANCH=main
 
 # Variabili d'ambiente di default per l'applicazione
 ENV NODE_ENV=production
 ENV PORT=5501
 ENV K8S_NAMESPACE="syntracloud"
 ENV IPFS_API_URL="http://127.0.0.1:5001"
+ENV PYTHONUNBUFFERED=1
 
-# Directory di lavoro principale per il clone
-WORKDIR /opt/syntraswarm
+# Directory di lavoro principale
+WORKDIR /opt/app
 
-# Installare dipendenze di sistema: git (per clonare) e curl (per scaricare kubectl)
-RUN apk add --no-cache git curl
+# Installare dipendenze di sistema:
+# - git: per clonare il repo
+# - curl: per scaricare kubectl
+# - procps: per utilità di processo (es. ps), utile per debug
+# - python3: necessario per node-gyp
+# - py3-pip: pip per Python, a volte utile
+# - make: necessario per node-gyp
+# - g++: compilatore C++, necessario per node-gyp
+# - build-base: meta-pacchetto Alpine che include make, g++, ecc. (alternativa a specificare make e g++ separatamente)
+RUN apk add --no-cache \
+    git \
+    curl \
+    procps \
+    python3 \
+    py3-pip \
+    make \
+    g++
+# Alternativa per build-base:
+# RUN apk add --no-cache git curl procps python3 py3-pip build-base
 
 # Installare kubectl
-RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+RUN echo "==> Installando kubectl versione ${KUBECTL_VERSION}..." \
+    && curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
     && chmod +x kubectl \
-    && mv kubectl /usr/local/bin/
+    && mv kubectl /usr/local/bin/ \
+    && echo "==> kubectl installato."
 
-# Clonare il repository
-RUN git clone --branch ${GIT_BRANCH} --single-branch --depth 1 ${GIT_REPO_URL} .
+# Clonare il repository specificato NELLA DIRECTORY DI LAVORO CORRENTE (/opt/app)
+RUN echo "==> Clonando repository ${GIT_REPO_URL} (branch: ${GIT_BRANCH}) in $(pwd)..." \
+    && git clone --branch ${GIT_BRANCH} --single-branch --depth 1 ${GIT_REPO_URL} . \
+    && echo "==> Repository clonato."
 
-# Impostare la directory di lavoro per l'applicazione master
-WORKDIR /opt/syntraswarm/${APP_SUB_DIR}
+# --------------- SEZIONE DI DEBUG FILE SYSTEM (PUOI COMMENTARLA O RIMUOVERLA DOPO) ---------------
+RUN echo "==> DEBUG: Contenuto di $(pwd) (dovrebbe essere la root del repo clonato):" \
+    && ls -la
+# --------------- FINE SEZIONE DI DEBUG FILE SYSTEM ---------------
 
-# Controlla se package.json esiste prima di eseguire npm ci
-RUN if [ ! -f package.json ]; then \
-      echo "Errore: package.json non trovato in $(pwd)" && exit 1; \
-    fi
+# Verifica esplicita dell'esistenza di package.json nella WORKDIR corrente (/opt/app)
+RUN echo "==> Verificando l'esistenza di package.json in $(pwd)..." \
+    && if [ ! -f package.json ]; then \
+         echo "ERRORE CRITICO: package.json non trovato in $(pwd) !" \
+         && echo "Controllare la struttura del repository ${GIT_REPO_URL}." \
+         && exit 1; \
+       else \
+         echo "==> package.json trovato in $(pwd)."; \
+       fi
 
 # Installa le dipendenze dell'applicazione master
-RUN npm ci --omit=dev
+RUN echo "==> Installando dipendenze Node.js da $(pwd)..." \
+    && npm ci --omit=dev --no-fund --no-audit --legacy-peer-deps \
+    && echo "==> Dipendenze Node.js installate."
 
 # Esporre la porta dell'applicazione (definita da ENV PORT)
 EXPOSE ${PORT}
 
-# Comando per avviare l'applicazione
+# Comando per avviare l'applicazione master
 CMD ["node", "server.js"]
 
 # Healthcheck
