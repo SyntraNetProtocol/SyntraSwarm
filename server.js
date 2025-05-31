@@ -1,8 +1,6 @@
 // server.js
 
-// Carica prima le variabili d'ambiente da .env se presenti (utile per sviluppo locale fuori Docker)
-// In Docker, queste verranno passate da docker-compose
-require("dotenv").config();
+require("dotenv").config(); // Per sviluppo locale fuori Docker
 
 const http = require("http");
 const { exec } = require("child_process");
@@ -10,83 +8,106 @@ const express = require("express");
 const cors = require("cors");
 const path = require("path");
 
-// Assumiamo che la tua configurazione e la logica principale siano in SyntraCloud
-// Adatta i percorsi se necessario, basandoti sulla struttura del repo SyntraSwarm
-// Se i file sono direttamente nella root con server.js, i percorsi cambiano (es. './config')
-const config = require("./SyntraCloud/config"); // Potrebbe essere solo './config' se config è nella root
-const state = require("./SyntraCloud/state");   // Potrebbe essere solo './state'
-const utils = require("./SyntraCloud/utils");   // Potrebbe essere solo './utils'
+// --- INIZIO SEZIONE DA ADATTARE ALLA TUA STRUTTURA DI REPOSITORY ---
+// Modifica questi percorsi 'require' per farli corrispondere a dove si trovano
+// i tuoi moduli nel repository SyntraSwarm, relativi a questo file server.js.
+// Esempio: se config.js è nella stessa directory di server.js, usa './config'.
+const config = require("./SyntraCloud/config");
+const state = require("./SyntraCloud/state");
+const utils = require("./SyntraCloud/utils");
 const dashboardService = require("./SyntraCloud/services/dashboardService");
 const keepAlive = require("./SyntraCloud/infra/keepAlive");
 const sessionManager = require("./SyntraCloud/session/manager");
 const websocketHandler = require("./SyntraCloud/network/websocketHandler");
-const k8sPodLifecycle = require("./SyntraCloud/infra/kubernetes/podLifecycle"); // Se usato direttamente
-const ipfsService = require("./SyntraCloud/services/ipfsService"); // Se usato
+const k8sPodLifecycle = require("./SyntraCloud/infra/kubernetes/podLifecycle"); // Usato per /api/set-pod-image
+const ipfsService = require("./SyntraCloud/services/ipfsService"); // Usato in runInitialChecks
+// --- FINE SEZIONE DA ADATTARE ---
 
 const app = express();
-let server;
+let server; // Istanza del server HTTP
 let backupIntervalId = null;
 let dashboardIntervalId = null;
 let isShuttingDown = false;
 
-// Il percorso del kubeconfig all'interno del container, come definito in docker-compose.yml
 const KUBECONFIG_PATH_IN_CONTAINER = "/root/.kube/config-for-docker";
+const KUBECTL_TIMEOUT = 60000; // Timeout aumentato a 60 secondi per i comandi kubectl
 
-// ---- MIDDLEWARE ----
+// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Serve i file statici della frontend se presente
-// Adatta il percorso a 'frontend' se è diverso nel repo clonato
+// Serve file statici dalla directory 'frontend' (adatta il percorso se necessario)
+// Assumendo che 'frontend' sia una sottodirectory nella stessa posizione di server.js
+// Se server.js è in /opt/app e frontend è in /opt/app/frontend, questo è corretto.
 app.use(express.static(path.join(__dirname, 'frontend')));
 
-
-// ---- FUNZIONE DI CHECK INIZIALE CON KUBECTL CORRETTO ----
 async function runInitialChecks() {
     console.log("[Server] Avvio controlli iniziali...");
     let checksPassed = true;
 
     if (!config || !config.K8S_NAMESPACE) {
-        console.error("[Server] ERRORE FATALE: Configurazione (config.js o config.K8S_NAMESPACE) non trovata o incompleta.");
-        return Promise.reject(new Error("Configurazione mancante o K8S_NAMESPACE non definito."));
+        const errMsg = "Configurazione (config.js o config.K8S_NAMESPACE) non trovata o incompleta.";
+        console.error(`[Server] ERRORE FATALE: ${errMsg}`);
+        // In un'applicazione reale, potresti voler lanciare un errore qui
+        // per fermare l'avvio se la configurazione è critica.
+        throw new Error(errMsg);
     }
+    const NAMESPACE_TO_CHECK = config.K8S_NAMESPACE;
 
     // 1. Controllo client kubectl
-    // Dentro runInitialChecks, per il controllo del namespace:
-try {
-    await new Promise((resolve, reject) => {
-        const KUBECONFIG_PATH = "/root/.kube/config-for-docker"; // Definito prima
-        const NAMESPACE_TO_CHECK = config.K8S_NAMESPACE; // Assumendo che config.K8S_NAMESPACE sia 'syntracloud'
-
-        const command = `kubectl --kubeconfig=${KUBECONFIG_PATH} get namespace ${NAMESPACE_TO_CHECK} -o name`;
-        
-        console.log(`[Server][DEBUG_EXEC] Tentativo esecuzione comando: ${command}`);
-        console.log(`[Server][DEBUG_EXEC] Variabili d'ambiente del processo Node.js (parziale): KUBECONFIG=${process.env.KUBECONFIG}, PATH=${process.env.PATH}`);
-
-        exec(command, { timeout: 15000, env: { ...process.env, KUBECONFIG: KUBECONFIG_PATH_IN_CONTAINER } }, (err, stdout, stderr) => { // Aggiunto env esplicito
-            console.log(`[Server][DEBUG_EXEC] Comando eseguito.`);
-            console.log(`[Server][DEBUG_EXEC] Errore (err object):`, err);
-            console.log(`[Server][DEBUG_EXEC] STDOUT:\n${stdout}`);
-            console.log(`[Server][DEBUG_EXEC] STDERR:\n${stderr}`);
-
-            if (err) {
-                const detailedError = `Codice: ${err.code}, Segnale: ${err.signal}, STDERR: ${stderr || 'N/A'}, STDOUT: ${stdout || 'N/A'}`;
-                console.error(`[Server] Errore controllo namespace '${NAMESPACE_TO_CHECK}' con exec: ${detailedError}`);
-                return reject(new Error(`Namespace Kubernetes '${NAMESPACE_TO_CHECK}' non trovato o inaccessibile: ${stderr || err.message || detailedError}`));
-            }
-            if (!stdout || !stdout.trim().includes(`namespace/${NAMESPACE_TO_CHECK}`)) {
-                console.error(`[Server] Output controllo namespace '${NAMESPACE_TO_CHECK}' non valido: ${stdout}`);
-                return reject(new Error(`Namespace Kubernetes '${NAMESPACE_TO_CHECK}' non trovato nell'output (output: ${stdout.trim()}).`));
-            }
-            console.log(`[Server] Controllo namespace '${NAMESPACE_TO_CHECK}' OK: ${stdout.trim()}`);
-            resolve();
+    try {
+        await new Promise((resolve, reject) => {
+            const commandClient = `kubectl --kubeconfig=${KUBECONFIG_PATH_IN_CONTAINER} version --client --output=json`;
+            console.log(`[Server][DEBUG_EXEC] CHECK CLIENT: ${commandClient}`);
+            exec(commandClient, { timeout: KUBECTL_TIMEOUT, env: { ...process.env, KUBECONFIG: KUBECONFIG_PATH_IN_CONTAINER } }, (err, stdout, stderr) => {
+                console.log(`[Server][DEBUG_EXEC] CHECK CLIENT - STDOUT: ${stdout}`);
+                console.log(`[Server][DEBUG_EXEC] CHECK CLIENT - STDERR: ${stderr}`);
+                if (err) {
+                    console.error(`[Server][DEBUG_EXEC] CHECK CLIENT - Errore (err object):`, err);
+                    return reject(new Error(`Controllo client kubectl fallito: ${stderr || err.message || `Code: ${err.code}, Signal: ${err.signal}`}`));
+                }
+                try {
+                    const versionInfo = JSON.parse(stdout);
+                    console.log(`[Server] Controllo client kubectl OK. Versione client: ${versionInfo.clientVersion?.gitVersion || 'N/A'}`);
+                    resolve();
+                } catch (parseErr) {
+                    reject(new Error(`Errore parsing output versione kubectl: ${parseErr.message}`));
+                }
+            });
         });
-    });
-} catch (k8sNsErr) {
-    console.error(`[Server] ERRORE CONTROLLO NAMESPACE (blocco catch): ${k8sNsErr.message}`);
-    checksPassed = false; // Assicurati che checksPassed sia definito nel contesto di questa funzione
-}
-    // 3. Controllo directory di backup (se la tua app la usa direttamente)
+    } catch (k8sClientErr) {
+        console.error(`[Server] ERRORE CONTROLLO KUBECTL CLIENT: ${k8sClientErr.message}`);
+        checksPassed = false;
+    }
+
+    // 2. Controllo namespace
+    if (checksPassed) {
+        try {
+            await new Promise((resolve, reject) => {
+                const commandNs = `kubectl --kubeconfig=${KUBECONFIG_PATH_IN_CONTAINER} get namespace ${NAMESPACE_TO_CHECK} -o name`;
+                console.log(`[Server][DEBUG_EXEC] CHECK NAMESPACE: ${commandNs}`);
+                exec(commandNs, { timeout: KUBECTL_TIMEOUT, env: { ...process.env, KUBECONFIG: KUBECONFIG_PATH_IN_CONTAINER } }, (err, stdout, stderr) => {
+                    console.log(`[Server][DEBUG_EXEC] CHECK NAMESPACE - STDOUT: ${stdout}`);
+                    console.log(`[Server][DEBUG_EXEC] CHECK NAMESPACE - STDERR: ${stderr}`);
+                    if (err) {
+                        console.error(`[Server][DEBUG_EXEC] CHECK NAMESPACE - Errore (err object):`, err);
+                        const detailedErrorMsg = stderr || err.message || `Errore sconosciuto (codice: ${err.code}, segnale: ${err.signal})`;
+                        return reject(new Error(`Namespace Kubernetes '${NAMESPACE_TO_CHECK}' non trovato o inaccessibile: ${detailedErrorMsg}`));
+                    }
+                    if (!stdout || !stdout.trim().includes(`namespace/${NAMESPACE_TO_CHECK}`)) {
+                        return reject(new Error(`Namespace Kubernetes '${NAMESPACE_TO_CHECK}' non trovato nell'output (output: ${stdout.trim()}).`));
+                    }
+                    console.log(`[Server] Controllo namespace '${NAMESPACE_TO_CHECK}' OK: ${stdout.trim()}`);
+                    resolve();
+                });
+            });
+        } catch (k8sNsErr) {
+            console.error(`[Server] ERRORE CONTROLLO NAMESPACE: ${k8sNsErr.message}`);
+            checksPassed = false;
+        }
+    }
+
+    // 3. Controllo directory di backup
     if (checksPassed && utils && typeof utils.ensureBackupDirExists === 'function') {
         try {
             await utils.ensureBackupDirExists();
@@ -99,42 +120,36 @@ try {
         console.warn("[Server] Avviso: Funzione ensureBackupDirExists non trovata in utils. Controllo directory di backup saltato.");
     }
     
-    // 4. Inizializzazione IPFS (se necessario all'avvio)
+    // 4. Inizializzazione IPFS
     if (checksPassed && ipfsService && typeof ipfsService.initializeIpfsClient === 'function') {
         try {
             await ipfsService.initializeIpfsClient();
             console.log("[Server] Inizializzazione client IPFS OK.");
         } catch (ipfsErr) {
             console.error(`[Server] ERRORE INIZIALIZZAZIONE IPFS: ${ipfsErr.message}. L'applicazione potrebbe funzionare con funzionalità IPFS limitate o assenti.`);
-            // Decidi se questo errore debba essere fatale o solo un avviso.
-            // checksPassed = false; // Decommenta se IPFS è critico per l'avvio
+            // Decidi se questo errore è fatale per l'avvio.
+            // checksPassed = false; // Decommenta se IPFS è critico
         }
     } else {
         console.warn("[Server] Avviso: ipfsService o initializeIpfsClient non trovati. Inizializzazione IPFS saltata.");
     }
 
-
     if (!checksPassed) {
-        console.error("[Server] Uno o più controlli iniziali sono falliti. Uscita dall'applicazione.");
-        // process.exit(1); // Esce immediatamente
-        return Promise.reject(new Error("Controlli iniziali falliti.")); // Permette al chiamante di gestire lo shutdown
+        const failMsg = "Uno o più controlli iniziali sono falliti. Uscita dall'applicazione.";
+        console.error(`[Server] ${failMsg}`);
+        throw new Error(failMsg); // Lancia un errore per essere gestito da startServer()
     }
 
     console.log("[Server] Tutti i controlli iniziali sono stati superati.");
-    return Promise.resolve();
 }
 
-
-// ---- TASK PERIODICI ----
 function startPeriodicTasks() {
     if (!config || !state || !sessionManager || !dashboardService) {
         console.error("[Server] ERRORE: Impossibile avviare task periodici. Moduli di base mancanti.");
         return;
     }
-
     console.log("[Server] Avvio task periodici...");
 
-    if (backupIntervalId) clearInterval(backupIntervalId);
     if (config.BACKUP_INTERVAL_MS && config.BACKUP_INTERVAL_MS > 0 && sessionManager.triggerBackup) {
         backupIntervalId = setInterval(() => {
             if (!state.clientSessions) return;
@@ -150,11 +165,9 @@ function startPeriodicTasks() {
         }, config.BACKUP_INTERVAL_MS);
         console.log(`[Server] Task di backup periodico avviato (ogni ${config.BACKUP_INTERVAL_MS / 1000 / 60} min).`);
     } else {
-        console.log("[Server] Task di backup periodico non avviato (intervallo non configurato o funzione mancante).");
+        console.log("[Server] Task di backup periodico non avviato.");
     }
 
-
-    if (dashboardIntervalId) clearInterval(dashboardIntervalId);
     if (config.DASHBOARD_UPDATE_INTERVAL_MS && config.DASHBOARD_UPDATE_INTERVAL_MS > 0 && dashboardService.broadcastDashboardUpdate) {
         dashboardIntervalId = setInterval(dashboardService.broadcastDashboardUpdate, config.DASHBOARD_UPDATE_INTERVAL_MS);
         console.log(`[Server] Task di aggiornamento dashboard avviato (ogni ${config.DASHBOARD_UPDATE_INTERVAL_MS / 1000}s).`);
@@ -166,7 +179,7 @@ function startPeriodicTasks() {
         keepAlive.startKeepAlive();
         console.log("[Server] Servizio KeepAlive avviato.");
     } else {
-        console.warn("[Server] Avviso: Servizio KeepAlive non avviato (mancante o non funzione).");
+        console.warn("[Server] Avviso: Servizio KeepAlive non avviato.");
     }
 }
 
@@ -182,26 +195,23 @@ function stopPeriodicTasks() {
     dashboardIntervalId = null;
 }
 
-
-// ---- ROUTES API (ESEMPIO) ----
+// API Routes
 app.get('/health', (req, res) => {
     const healthStatus = {
         status: "OK",
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        kubernetes_checks: "Verificare log all'avvio", // Potresti voler esporre lo stato dei check qui
         active_contributors: state.contributorNodes ? state.contributorNodes.size : 0,
         active_client_sessions: state.clientSessions ? state.clientSessions.size : 0,
     };
     res.status(200).json(healthStatus);
 });
 
-// Esempio di API per impostare l'immagine pod (adatta se k8sPodLifecycle è usato)
 if (k8sPodLifecycle && typeof k8sPodLifecycle.setDefaultImage === 'function') {
     app.post('/api/set-pod-image', (req, res) => {
         const { imageName } = req.body;
         if (!imageName || typeof imageName !== 'string' || !imageName.trim()) {
-            return res.status(400).json({ success: false, error: 'Il campo imageName è obbligatorio.' });
+            return res.status(400).json({ success: false, error: 'Il campo imageName è obbligatorio e deve essere una stringa non vuota.' });
         }
         try {
             k8sPodLifecycle.setDefaultImage(imageName);
@@ -209,47 +219,48 @@ if (k8sPodLifecycle && typeof k8sPodLifecycle.setDefaultImage === 'function') {
             res.json({ success: true, message: `Immagine Pod predefinita impostata su: ${imageName}` });
         } catch (error) {
             console.error(`[Server] Errore API /api/set-pod-image: ${error.message}`);
-            res.status(500).json({ success: false, error: 'Errore interno del server.' });
+            res.status(500).json({ success: false, error: 'Errore interno del server durante l\'impostazione dell\'immagine.' });
         }
     });
+} else {
+    console.warn("[Server] k8sPodLifecycle.setDefaultImage non disponibile. Route /api/set-pod-image non attiva.");
 }
 
 
-// ---- GESTIONE AVVIO E SPEGNIMENTO ----
 async function startServer() {
     try {
-        await runInitialChecks(); // Attende il completamento dei check
+        await runInitialChecks(); // Attende il completamento dei check prima di procedere
         
         server = http.createServer(app);
 
         if (websocketHandler && typeof websocketHandler.initializeWebSocketServer === 'function') {
-            websocketHandler.initializeWebSocketServer(server);
+            websocketHandler.initializeWebSocketServer(server); // Passa l'istanza del server HTTP
         } else {
             console.error("[Server] ERRORE FATALE: websocketHandler o la sua funzione di inizializzazione non disponibili.");
-            throw new Error("websocketHandler non inizializzato.");
+            throw new Error("websocketHandler non correttamente inizializzato.");
         }
 
         startPeriodicTasks();
 
-        server.listen(config.PORT || 5501, () => {
-            console.log(`[Server] Orchestrator SyntraNet in ascolto sulla porta ${config.PORT || 5501}. Ambiente: ${process.env.NODE_ENV}`);
+        const PORT = config.PORT || 5501;
+        server.listen(PORT, () => {
+            console.log(`[Server] Orchestrator SyntraNet in ascolto sulla porta ${PORT}. Ambiente: ${process.env.NODE_ENV || 'development'}`);
         });
 
         server.on('error', (error) => {
             if (error.code === 'EADDRINUSE') {
-                console.error(`[Server] ERRORE FATALE: La porta ${config.PORT || 5501} è già in uso.`);
+                console.error(`[Server] ERRORE FATALE: La porta ${PORT} è già in uso.`);
             } else {
                 console.error(`[Server] ERRORE FATALE SERVER HTTP: ${error.message}`);
             }
-            shutdown('server_error_listen', true); // Forza lo shutdown
+            shutdown('server_error_listen', true);
         });
 
     } catch (error) {
         console.error(`[Server] ERRORE FATALE durante l'inizializzazione: ${error.message}`);
-        console.error(error.stack);
-        // Non chiamare shutdown() qui se process.exit(1) è già in runInitialChecks
-        // ma se runInitialChecks rigetta una Promise, allora è corretto uscire qui.
-        process.exit(1);
+        // L'errore da runInitialChecks è già stato loggato.
+        // Non è necessario loggare error.stack qui se non si vuole duplicare.
+        process.exit(1); // Esce con codice di errore
     }
 }
 
@@ -263,76 +274,91 @@ function shutdown(signal, forceExit = false) {
 
     stopPeriodicTasks();
 
-    // Chiudi connessioni WebSocket client
-    if (state && state.clientSessions) {
+    if (state && state.clientSessions && sessionManager && typeof sessionManager.cleanupClientSession === 'function') {
         console.log("[Server] Chiusura sessioni client attive...");
         Array.from(state.clientSessions.keys()).forEach(clientId => {
-            sessionManager.cleanupClientSession(clientId, `Spegnimento server (${signal})`);
+            try {
+                sessionManager.cleanupClientSession(clientId, `Spegnimento server (${signal})`);
+            } catch (cleanupErr) {
+                console.error(`[Server] Errore durante cleanup sessione ${clientId}: ${cleanupErr.message}`);
+            }
         });
+    } else {
+        console.warn("[Server] Impossibile eseguire cleanup sessioni client: moduli o stato mancanti.");
     }
     
-    // Chiudi connessioni WebSocket contributors e dashboards
     if (websocketHandler && typeof websocketHandler.closeAllOtherConnections === 'function') {
-        websocketHandler.closeAllOtherConnections(`Spegnimento server (${signal})`);
-    } else if (state) { // Fallback manuale
+        console.log("[Server] Chiusura altre connessioni WebSocket...");
+        try {
+            websocketHandler.closeAllOtherConnections(`Spegnimento server (${signal})`);
+        } catch (wsErr) {
+            console.error(`[Server] Errore chiusura altre connessioni WS: ${wsErr.message}`);
+        }
+    } else if (state) { 
+        console.warn("[Server] Fallback: chiusura manuale connessioni contributor/dashboard.");
         if (state.contributorNodes) {
-            Array.from(state.contributorNodes.values()).forEach(node => node.ws?.close(1001, "Spegnimento server"));
+            Array.from(state.contributorNodes.values()).forEach(node => { try { node.ws?.close(1001, "Spegnimento server"); } catch(e){} });
         }
         if (state.dashboardSockets) {
-            Array.from(state.dashboardSockets.values()).forEach(dash => dash.ws?.close(1001, "Spegnimento server"));
+            Array.from(state.dashboardSockets.values()).forEach(dash => { try { dash.ws?.close(1001, "Spegnimento server"); } catch(e){} });
         }
     }
-
 
     if (server) {
         console.log("[Server] Chiusura server HTTP...");
         server.close((err) => {
-            if (err) console.error("[Server] Errore durante la chiusura del server HTTP:", err);
-            else console.log("[Server] Server HTTP chiuso.");
-            
-            console.log("[Server] Spegnimento controllato completato. Uscita.");
-            process.exit(err ? 1 : 0);
+            if (err) {
+                console.error("[Server] Errore durante la chiusura del server HTTP:", err);
+                process.exit(1);
+            } else {
+                console.log("[Server] Server HTTP chiuso. Spegnimento completato.");
+                process.exit(0);
+            }
         });
 
-        // Timeout per forzare lo spegnimento se il server non si chiude
         setTimeout(() => {
             console.error("[Server] Timeout spegnimento controllato (10s). Uscita forzata.");
             process.exit(1);
-        }, 10000).unref(); // .unref() permette al processo di uscire se tutto il resto è finito prima del timeout
-
+        }, 10000).unref();
     } else {
-        console.log("[Server] Server HTTP non avviato. Uscita.");
+        console.log("[Server] Server HTTP non avviato o già chiuso. Uscita.");
         process.exit(0);
     }
 }
 
-// Gestione Segnali
+// Gestione Segnali di Uscita
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Gestione Errori Non Catturati
 process.on("uncaughtException", (error, origin) => {
     console.error("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     console.error(`[Server] ECCEZIONE NON CATTURATA! Origine: ${origin}`);
-    console.error(error);
+    console.error("Errore:", error);
+    console.error("Stack:", error.stack);
     console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    // Prova a fare uno shutdown controllato, ma preparati a un'uscita forzata
     if (!isShuttingDown) {
-        shutdown('uncaughtException', true); // Il true forza lo shutdown anche se già in corso e poi esce
+        shutdown('uncaughtException', true);
     } else {
-         process.exit(1); // Se già in shutdown, esci brutalmente
+        // Se già in spegnimento, potrebbe essere un errore durante lo spegnimento stesso.
+        // Uscita forzata per evitare loop.
+        console.error("[Server] Eccezione non catturata durante lo spegnimento. Uscita forzata.");
+        process.exit(1);
     }
 });
+
 process.on("unhandledRejection", (reason, promise) => {
     console.error("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
     console.error("[Server] RIGETTO PROMISE NON GESTITO!");
-    console.error("Motivo:", reason);
-    // In un'app di produzione, potresti voler terminare il processo qui
-    // o avere una strategia di recovery più robusta.
-    // Per ora, logghiamo e continuiamo, ma è un rischio.
-    // Se l'unhandledRejection è critico, considera:
-    // if (!isShuttingDown) { shutdown('unhandledRejection'); }
+    console.error("Motivo del rigetto:", reason);
+    // console.error("Promise:", promise); // Può essere molto verboso
     console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+    // In produzione, un unhandledRejection dovrebbe probabilmente far terminare il processo
+    // dopo aver tentato un cleanup, perché lo stato dell'applicazione potrebbe essere inconsistente.
+    // if (!isShuttingDown) {
+    //     shutdown('unhandledRejection');
+    // }
 });
 
-
-// ---- AVVIO APPLICAZIONE ----
+// Avvio effettivo del server
 startServer();
