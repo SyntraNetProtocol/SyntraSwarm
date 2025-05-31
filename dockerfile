@@ -1,45 +1,49 @@
-# Usa un'immagine Node.js ufficiale come base. Alpine è leggera.
-# Scegli una versione LTS specifica, es: node:18-alpine o node:20-alpine
+# Scegli un'immagine base. node:20-alpine è buona per Node.js e leggera.
 FROM node:20-alpine AS base
 
-# Imposta la directory di lavoro nell'immagine
-WORKDIR /usr/src/app
+# ARG per flessibilità
+ARG KUBECTL_VERSION=v1.28.2 # Scegli la versione di kubectl che ti serve
+ARG GIT_REPO_URL=https://github.com/SyntraNetProtocol/SyntraSwarm.git
+ARG GIT_BRANCH=main # O un branch/tag specifico
+ARG APP_SUB_DIR=backend/master
 
-# Copia package.json e package-lock.json (se esiste)
-# Copiare questi file separatamente permette a Docker di sfruttare la cache
-# se non cambiano, evitando di rieseguire npm install inutilmente.
-COPY package.json package-lock.json* ./
-
-# Installa le dipendenze di produzione
-# 'npm ci' è generalmente raccomandato per build riproducibili se hai package-lock.json
-# '--only=production' assicura che le devDependencies non vengano installate
-RUN npm install
-
-# Copia il resto del codice dell'applicazione
-COPY . .
-
-# La tua applicazione sembra esporre la porta definita in .env o default (5501 da config/index.js)
-# Esponiamo questa porta. Puoi cambiarla se necessario.
-ENV PORT=5501
-EXPOSE ${PORT}
-
-# Definisci variabili d'ambiente di default.
-# Queste possono essere sovrascritte al runtime.
-# !!! ATTENZIONE: NON INCLUDERE VALORI SENSIBILI QUI (es. MASTER_ENCRYPTION_KEY) !!!
-# Verranno passati tramite docker-compose.yml o comandi `docker run -e`.
+# Variabili d'ambiente di default per l'applicazione
 ENV NODE_ENV=production
+ENV PORT=5501
 ENV K8S_NAMESPACE="syntracloud"
 ENV IPFS_API_URL="http://127.0.0.1:5001"
-# Aggiungi altre variabili d'ambiente da .env come default se necessario,
-# ma ricorda che le più importanti (come chiavi e URL specifici) verranno passate al runtime.
-# Es: ENV BASE_URL="http://localhost:8092" # O un valore più generico
+
+# Directory di lavoro principale per il clone
+WORKDIR /opt/syntraswarm
+
+# Installare dipendenze di sistema: git (per clonare) e curl (per scaricare kubectl)
+RUN apk add --no-cache git curl
+
+# Installare kubectl
+RUN curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/
+
+# Clonare il repository
+RUN git clone --branch ${GIT_BRANCH} --single-branch --depth 1 ${GIT_REPO_URL} .
+
+# Impostare la directory di lavoro per l'applicazione master
+WORKDIR /opt/syntraswarm/${APP_SUB_DIR}
+
+# Controlla se package.json esiste prima di eseguire npm ci
+RUN if [ ! -f package.json ]; then \
+      echo "Errore: package.json non trovato in $(pwd)" && exit 1; \
+    fi
+
+# Installa le dipendenze dell'applicazione master
+RUN npm ci --omit=dev
+
+# Esporre la porta dell'applicazione (definita da ENV PORT)
+EXPOSE ${PORT}
 
 # Comando per avviare l'applicazione
-# Il tuo package.json usa "node server.cjs", ma il file si chiama "server.js".
-# Assumendo che server.js sia corretto:
 CMD ["node", "server.js"]
 
-# Aggiungi un healthcheck se il tuo server.js ha un endpoint di health
-# Sembra che tu abbia un endpoint /health
+# Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -q -O- "http://localhost:${PORT}/health" || exit 1
